@@ -118,23 +118,14 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <assembly alias="System.Windows.Forms" name="System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089" />
-  <data name="aaaaaaa" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\aaaaaaa.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
-  </data>
-  <data name="acti_gray" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\acti_gray.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
-  </data>
-  <data name="acti_white" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\acti_white.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
-  </data>
-  <data name="cameraa_gray" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\cameraa_gray.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
-  </data>
   <data name="cameraa_white" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\cameraa_white.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
-  <data name="flat-color-icons--camera" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\flat-color-icons--camera.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  <data name="presony_gray1" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\presony_gray1.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="acti_white" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\acti_white.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
   <data name="persony_white" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\persony_white.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
@@ -142,7 +133,34 @@
   <data name="presony_gray" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\presony_gray.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
+  <data name="cameraa_gray" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\cameraa_gray.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="material-symbols--add" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\material-symbols--add.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="acti_gray" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\acti_gray.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="yyuuyuyuyuyuy" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\yyuuyuyuyuyuy.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="vbvbvbvbvbvb" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\vbvbvbvbvbvb.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
   <data name="ssssssss" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\ssssssss.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="flat-color-icons--camera" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\flat-color-icons--camera.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="aaaaaaa" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\aaaaaaa.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="akar-icons--person" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\akar-icons--person.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
+  <data name="hghghghgh" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\hghghghgh.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
 </root>

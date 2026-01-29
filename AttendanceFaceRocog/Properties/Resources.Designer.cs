@@ -93,6 +93,16 @@ namespace AttendanceFaceRocog.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap akar_icons__person {
+            get {
+                object obj = ResourceManager.GetObject("akar-icons--person", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap cameraa_gray {
             get {
                 object obj = ResourceManager.GetObject("cameraa_gray", resourceCulture);
@@ -123,6 +133,26 @@ namespace AttendanceFaceRocog.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap hghghghgh {
+            get {
+                object obj = ResourceManager.GetObject("hghghghgh", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap material_symbols__add {
+            get {
+                object obj = ResourceManager.GetObject("material-symbols--add", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap persony_white {
             get {
                 object obj = ResourceManager.GetObject("persony_white", resourceCulture);
@@ -143,9 +173,39 @@ namespace AttendanceFaceRocog.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap presony_gray1 {
+            get {
+                object obj = ResourceManager.GetObject("presony_gray1", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap ssssssss {
             get {
                 object obj = ResourceManager.GetObject("ssssssss", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap vbvbvbvbvbvb {
+            get {
+                object obj = ResourceManager.GetObject("vbvbvbvbvbvb", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap yyuuyuyuyuyuy {
+            get {
+                object obj = ResourceManager.GetObject("yyuuyuyuyuyuy", resourceCulture);
                 return ((System.Drawing.Bitmap)(obj));
             }
         }
