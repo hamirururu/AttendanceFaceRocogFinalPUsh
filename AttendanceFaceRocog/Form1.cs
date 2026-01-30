@@ -29,7 +29,7 @@ namespace AttendanceFaceRocog
             // Create UserControl1 and add it to guna2Panel2
             scannerControl = new UserControl1();
             scannerControl.Dock = DockStyle.Fill;
-            guna2Panel2.Controls.Add(scannerControl);
+            PanelControler.Controls.Add(scannerControl);
         }
 
         private void ApplyTheme()
@@ -39,7 +39,7 @@ namespace AttendanceFaceRocog
             guna2HtmlLabel1.ForeColor = AppTheme.Light.Foreground;
             guna2HtmlLabel1.Font = AppTheme.HeadingSmall;
             guna2HtmlLabel2.ForeColor = AppTheme.Light.Foreground;
-            guna2Panel2.FillColor = AppTheme.Light.Card;
+            PanelControler.FillColor = AppTheme.Light.Card;
         }
 
         private void InitializeClock()
@@ -70,7 +70,7 @@ namespace AttendanceFaceRocog
 
         private void SetActiveButton(Guna.UI2.WinForms.Guna2Button activeBtn)
         {
-            var buttons = new[] { btnScanner, btnRecentAct, btnProfiles };
+            var buttons = new[] { btnScanner, btnRecentAct, BtnProfiles };
 
             foreach (var btn in buttons)
             {
@@ -101,14 +101,27 @@ namespace AttendanceFaceRocog
         private void BtnScanner_Click(object? sender, EventArgs e)
         {
             SetActiveButton(btnScanner);
-            guna2Panel2.Show();
+            PanelControler.Show();
             scannerControl?.Show();
+
+            PanelControler.Controls.Clear();
+
+            UserControl1 uc = new UserControl1();
+            uc.Dock = DockStyle.Fill;
+
+            PanelControler.Controls.Add(uc);
         }
 
         private void BtnProfiles_Click(object? sender, EventArgs e)
         {
-            SetActiveButton(btnProfiles);
-            // Handle profiles view
+            SetActiveButton(BtnProfiles);
+
+            PanelControler.Controls.Clear();
+
+            EmployeeProfileControl uc = new EmployeeProfileControl();
+            uc.Dock = DockStyle.Fill;
+
+            PanelControler.Controls.Add(uc);
         }
 
         public void guna2Panel1_Paint(object? sender, PaintEventArgs e)
