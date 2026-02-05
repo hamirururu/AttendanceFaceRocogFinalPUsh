@@ -93,24 +93,83 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Log attendance action
+        /// Log attendance action - Only allows one entry per action per day
+        /// Returns: (success, message)
         /// </summary>
-        public static void LogAttendance(int empId, string timeIn, string timeOut, string startBr, string stopBr)
+        public static (bool success, string message) LogAttendance(int empId, string timeIn, string timeOut, string startBr, string stopBr)
         {
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"INSERT INTO dbo.Attendance (empID, TimeIn, TimeOut, StartBreak, StopBreak, LogTime) 
-                           VALUES (@empID, @TimeIn, @TimeOut, @StartBreak, @StopBreak, GETDATE())";
+            // Check if a record exists for this employee today
+            string checkQuery = @"SELECT attendanceID, TimeIn, TimeOut, StartBreak, StopBreak 
+                                 FROM dbo.Attendance 
+                                 WHERE empID = @empID AND CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
 
-            using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
-            cmd.Parameters.AddWithValue("@TimeIn", timeIn);
-            cmd.Parameters.AddWithValue("@TimeOut", timeOut);
-            cmd.Parameters.AddWithValue("@StartBreak", startBr);
-            cmd.Parameters.AddWithValue("@StopBreak", stopBr);
+            using var checkCmd = new SqlCommand(checkQuery, conn);
+            checkCmd.Parameters.AddWithValue("@empID", empId);
 
-            cmd.ExecuteNonQuery();
+            using var reader = checkCmd.ExecuteReader();
+
+            if (reader.Read())
+            {
+                int attendanceId = reader.GetInt32(0);
+                string existingTimeIn = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                string existingTimeOut = reader.IsDBNull(2) ? "" : reader.GetString(2);
+                string existingStartBreak = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                string existingStopBreak = reader.IsDBNull(4) ? "" : reader.GetString(4);
+
+                reader.Close();
+
+                // Check if the action is already recorded
+                if (!string.IsNullOrEmpty(timeIn) && !string.IsNullOrEmpty(existingTimeIn))
+                    return (false, "Time In already recorded today.");
+
+                if (!string.IsNullOrEmpty(timeOut) && !string.IsNullOrEmpty(existingTimeOut))
+                    return (false, "Time Out already recorded today.");
+
+                if (!string.IsNullOrEmpty(startBr) && !string.IsNullOrEmpty(existingStartBreak))
+                    return (false, "Start Break already recorded today.");
+
+                if (!string.IsNullOrEmpty(stopBr) && !string.IsNullOrEmpty(existingStopBreak))
+                    return (false, "Stop Break already recorded today.");
+
+                // Update only empty fields
+                string updateQuery = @"UPDATE dbo.Attendance SET 
+                                      TimeIn = CASE WHEN @TimeIn != '' AND TimeIn = '' THEN @TimeIn ELSE TimeIn END,
+                                      TimeOut = CASE WHEN @TimeOut != '' AND TimeOut = '' THEN @TimeOut ELSE TimeOut END,
+                                      StartBreak = CASE WHEN @StartBreak != '' AND StartBreak = '' THEN @StartBreak ELSE StartBreak END,
+                                      StopBreak = CASE WHEN @StopBreak != '' AND StopBreak = '' THEN @StopBreak ELSE StopBreak END
+                                      WHERE attendanceID = @attendanceID";
+
+                using var updateCmd = new SqlCommand(updateQuery, conn);
+                updateCmd.Parameters.AddWithValue("@TimeIn", timeIn);
+                updateCmd.Parameters.AddWithValue("@TimeOut", timeOut);
+                updateCmd.Parameters.AddWithValue("@StartBreak", startBr);
+                updateCmd.Parameters.AddWithValue("@StopBreak", stopBr);
+                updateCmd.Parameters.AddWithValue("@attendanceID", attendanceId);
+
+                updateCmd.ExecuteNonQuery();
+            }
+            else
+            {
+                reader.Close();
+
+                // Insert new record for today
+                string insertQuery = @"INSERT INTO dbo.Attendance (empID, TimeIn, TimeOut, StartBreak, StopBreak, LogTime) 
+                                      VALUES (@empID, @TimeIn, @TimeOut, @StartBreak, @StopBreak, GETDATE())";
+
+                using var insertCmd = new SqlCommand(insertQuery, conn);
+                insertCmd.Parameters.AddWithValue("@empID", empId);
+                insertCmd.Parameters.AddWithValue("@TimeIn", timeIn);
+                insertCmd.Parameters.AddWithValue("@TimeOut", timeOut);
+                insertCmd.Parameters.AddWithValue("@StartBreak", startBr);
+                insertCmd.Parameters.AddWithValue("@StopBreak", stopBr);
+
+                insertCmd.ExecuteNonQuery();
+            }
+
+            return (true, "Attendance recorded successfully.");
         }
 
         public static string? GetEmployeeFaceImage(int empId)
@@ -145,6 +204,193 @@ namespace AttendanceFaceRocog
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Get attendance history for an employee (last 7 days)
+        /// </summary>
+        public static DataTable GetEmployeeAttendanceHistory(int empId, int days = 7)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"SELECT 
+                               CONVERT(VARCHAR(10), LogTime, 120) AS [Date],
+                               TimeIn AS [Time In],
+                               TimeOut AS [Time Out],
+                               StartBreak AS [Start Break],
+                               StopBreak AS [Stop Break]
+                           FROM dbo.Attendance 
+                           WHERE empID = @empID 
+                             AND LogTime >= DATEADD(DAY, -@Days, GETDATE())
+                           ORDER BY LogTime DESC";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@empID", empId);
+            cmd.Parameters.AddWithValue("@Days", days);
+
+            using var adapter = new SqlDataAdapter(cmd);
+            DataTable dt = new DataTable();
+            adapter.Fill(dt);
+            return dt;
+        }
+
+        /// <summary>
+        /// Get today's attendance status for an employee
+        /// Returns which actions have already been recorded
+        /// </summary>
+        public static (bool hasTimeIn, bool hasTimeOut, bool hasStartBreak, bool hasStopBreak) GetTodayAttendanceStatus(int empId)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"SELECT TimeIn, TimeOut, StartBreak, StopBreak 
+                     FROM dbo.Attendance 
+                     WHERE empID = @empID AND CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@empID", empId);
+
+            using var reader = cmd.ExecuteReader();
+            if (reader.Read())
+            {
+                bool hasTimeIn = !reader.IsDBNull(0) && !string.IsNullOrEmpty(reader.GetString(0));
+                bool hasTimeOut = !reader.IsDBNull(1) && !string.IsNullOrEmpty(reader.GetString(1));
+                bool hasStartBreak = !reader.IsDBNull(2) && !string.IsNullOrEmpty(reader.GetString(2));
+                bool hasStopBreak = !reader.IsDBNull(3) && !string.IsNullOrEmpty(reader.GetString(3));
+
+                return (hasTimeIn, hasTimeOut, hasStartBreak, hasStopBreak);
+            }
+
+            return (false, false, false, false);
+        }
+
+        /// <summary>
+        /// Get all attendance records for today
+        /// </summary>
+        public static DataTable GetTodayAllAttendance()
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"SELECT 
+                        a.attendanceID,
+                        a.empID,
+                        e.FullName,
+                        e.empCode,
+                        a.TimeIn,
+                        a.TimeOut,
+                        a.StartBreak,
+                        a.StopBreak,
+                        a.LogTime
+                   FROM dbo.Attendance a
+                   INNER JOIN dbo.Employees e ON a.empID = e.empID
+                   WHERE CAST(a.LogTime AS DATE) = CAST(GETDATE() AS DATE)
+                   ORDER BY a.LogTime DESC";
+
+            using var cmd = new SqlCommand(query, conn);
+            using var adapter = new SqlDataAdapter(cmd);
+    
+            DataTable dt = new DataTable();
+            adapter.Fill(dt);
+            return dt;
+        }
+
+        /// <summary>
+        /// Get attendance statistics for today
+        /// </summary>
+        public static (int timeInCount, int timeOutCount, int startBreakCount, int stopBreakCount) GetTodayAttendanceStats()
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"SELECT 
+                        COUNT(CASE WHEN TimeIn IS NOT NULL AND TimeIn != '' THEN 1 END) AS TimeInCount,
+                        COUNT(CASE WHEN TimeOut IS NOT NULL AND TimeOut != '' THEN 1 END) AS TimeOutCount,
+                        COUNT(CASE WHEN StartBreak IS NOT NULL AND StartBreak != '' THEN 1 END) AS StartBreakCount,
+                        COUNT(CASE WHEN StopBreak IS NOT NULL AND StopBreak != '' THEN 1 END) AS StopBreakCount
+                   FROM dbo.Attendance
+                   WHERE CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
+
+            using var cmd = new SqlCommand(query, conn);
+            using var reader = cmd.ExecuteReader();
+    
+            if (reader.Read())
+            {
+                return (
+                    reader.GetInt32(0),
+                    reader.GetInt32(1),
+                    reader.GetInt32(2),
+                    reader.GetInt32(3)
+                );
+            }
+
+            return (0, 0, 0, 0);
+        }
+
+        /// <summary>
+        /// Update employee name
+        /// </summary>
+        public static void UpdateEmployee(int empId, string fullName)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"UPDATE dbo.Employees 
+                     SET FullName = @FullName 
+                     WHERE empID = @empID";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@FullName", fullName);
+            cmd.Parameters.AddWithValue("@empID", empId);
+
+            cmd.ExecuteNonQuery();
+        }
+
+        /// <summary>
+        /// Delete employee and all related data
+        /// </summary>
+        public static void DeleteEmployee(int empId)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            // Start transaction to ensure data integrity
+            using var transaction = conn.BeginTransaction();
+
+            try
+            {
+                // Delete face images
+                string deleteFacesQuery = "DELETE FROM dbo.FaceImages WHERE empID = @empID";
+                using (var cmd = new SqlCommand(deleteFacesQuery, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@empID", empId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                // Delete attendance records
+                string deleteAttendanceQuery = "DELETE FROM dbo.Attendance WHERE empID = @empID";
+                using (var cmd = new SqlCommand(deleteAttendanceQuery, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@empID", empId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                // Delete employee
+                string deleteEmployeeQuery = "DELETE FROM dbo.Employees WHERE empID = @empID";
+                using (var cmd = new SqlCommand(deleteEmployeeQuery, conn, transaction))
+                {
+                    cmd.Parameters.AddWithValue("@empID", empId);
+                    cmd.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
         }
     }
 }

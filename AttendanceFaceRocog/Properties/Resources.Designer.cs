@@ -203,6 +203,16 @@ namespace AttendanceFaceRocog.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap lunch {
+            get {
+                object obj = ResourceManager.GetObject("lunch", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap material_symbols__add {
             get {
                 object obj = ResourceManager.GetObject("material-symbols--add", resourceCulture);
@@ -273,6 +283,16 @@ namespace AttendanceFaceRocog.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap time_in {
+            get {
+                object obj = ResourceManager.GetObject("time in", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap timeGray {
             get {
                 object obj = ResourceManager.GetObject("timeGray", resourceCulture);
@@ -286,6 +306,16 @@ namespace AttendanceFaceRocog.Properties {
         internal static System.Drawing.Bitmap timeMaliit {
             get {
                 object obj = ResourceManager.GetObject("timeMaliit", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
+        internal static System.Drawing.Bitmap timeout {
+            get {
+                object obj = ResourceManager.GetObject("timeout", resourceCulture);
                 return ((System.Drawing.Bitmap)(obj));
             }
         }
