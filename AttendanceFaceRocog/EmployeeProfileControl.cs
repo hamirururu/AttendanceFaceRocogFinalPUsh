@@ -18,11 +18,21 @@ namespace AttendanceFaceRocog
         private Mat? _lastFrame;
         private readonly FaceRecognitionService _faceService;
         private DataTable? _allEmployees;
+        
+        // Add these fields for face recognition
+        private int? _recognizedEmpId = null;
+        private string? _recognizedEmpName = null;
+        private bool _isRecognitionStable = false;
+        private Label? lblRecognitionStatus;
 
         public EmployeeProfileControl()
         {
             InitializeComponent();
+            
+            // Initialize face service WITH training (same as UserControl1)
             _faceService = new FaceRecognitionService();
+            _faceService.TrainModel();  // <-- THIS WAS MISSING!
+            
             SetupButtonEvents();
             SetupSearchEvent();
 
@@ -565,13 +575,31 @@ namespace AttendanceFaceRocog
         private void InitializeCameraPanel()
         {
             PnlCamContainer.Controls.Clear();
+
             picCamera = new PictureBox
             {
                 Dock = DockStyle.Fill,
-                SizeMode = PictureBoxSizeMode.StretchImage,
+                SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.Black
             };
             PnlCamContainer.Controls.Add(picCamera);
+
+            // Add recognition status label
+            lblRecognitionStatus = new Label
+            {
+                Text = "● Scanning...",
+                ForeColor = Color.Gray,
+                BackColor = Color.FromArgb(40, 40, 40),
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Dock = DockStyle.Bottom,
+                Height = 28,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            PnlCamContainer.Controls.Add(lblRecognitionStatus);
+            lblRecognitionStatus.BringToFront();
+
+            // Initialize Add button as disabled until new face is detected
+            SetAddButtonState(false, "Waiting...");
         }
 
         private void StartCamera()
@@ -616,6 +644,16 @@ namespace AttendanceFaceRocog
             _isCameraRunning = false;
             if (picCamera != null) picCamera.Image = null;
             BtnStartScan.Text = "Start Camera";
+
+            // Reset recognition state
+            _recognizedEmpId = null;
+            _recognizedEmpName = null;
+            _isRecognitionStable = false;
+
+            // Reset Add button to default state
+            BtnAdd.Enabled = true;
+            BtnAdd.Text = "ADD";
+            BtnAdd.FillColor = Color.FromArgb(34, 197, 94);
         }
 
         private void ProcessFrame(object? sender, EventArgs e)
@@ -631,6 +669,9 @@ namespace AttendanceFaceRocog
                 if (_lastFrame.IsEmpty) return;
 
                 CvInvoke.Flip(_lastFrame, _lastFrame, FlipType.Horizontal);
+
+                // Perform face recognition (same logic as UserControl1)
+                ProcessFaceRecognition(_lastFrame);
 
                 Bitmap bmp = _lastFrame.ToBitmap();
 
@@ -655,6 +696,163 @@ namespace AttendanceFaceRocog
                 System.Diagnostics.Debug.WriteLine($"ProcessFrame error: {ex.Message}");
             }
         }
+
+/// <summary>
+/// Process face recognition on the current frame
+/// </summary>
+private void ProcessFaceRecognition(Mat frame)
+{
+    try
+    {
+        var result = _faceService.RecognizeFace(frame);
+
+        if (result.HasValue)
+        {
+            var (empId, confidence, isStable) = result.Value;
+            var emp = DatabaseHelper.GetEmployeeById(empId);
+
+            if (emp.HasValue)
+            {
+                _recognizedEmpId = emp.Value.empId;
+                _recognizedEmpName = emp.Value.fullName;
+                _isRecognitionStable = isStable;
+
+                // Draw face rectangles with recognition info
+                var faces = _faceService.DetectFaces(frame);
+                foreach (var face in faces)
+                {
+                    var color = isStable ? new MCvScalar(0, 255, 0) : new MCvScalar(0, 165, 255);
+                    CvInvoke.Rectangle(frame, face, color, 3);
+
+                    string displayText = isStable
+                        ? $"{emp.Value.fullName} ({confidence:F0}%)"
+                        : "Verifying...";
+
+                    CvInvoke.PutText(frame, displayText,
+                        new Point(face.X, face.Y - 10),
+                        FontFace.HersheySimplex, 0.6, color, 2);
+
+                    if (isStable)
+                    {
+                        CvInvoke.PutText(frame, "REGISTERED",
+                            new Point(face.X, face.Y + face.Height + 20),
+                            FontFace.HersheySimplex, 0.5, new MCvScalar(0, 255, 0), 2);
+                    }
+                }
+
+                UpdateRecognitionStatus(isStable
+                    ? $"✓ Already registered: {emp.Value.fullName}"
+                    : "● Verifying...",
+                    isStable ? Color.LimeGreen : Color.Orange);
+
+                // DISABLE Add button when face is already registered
+                if (isStable)
+                {
+                    SetAddButtonState(false, $"Already Registered: {emp.Value.fullName}");
+                }
+            }
+        }
+        else
+        {
+            var faces = _faceService.DetectFaces(frame);
+
+            if (faces.Length > 0)
+            {
+                _recognizedEmpId = null;
+                _recognizedEmpName = null;
+                _isRecognitionStable = false;
+
+                foreach (var face in faces)
+                {
+                    CvInvoke.Rectangle(frame, face, new MCvScalar(255, 165, 0), 3);
+                    CvInvoke.PutText(frame, "NEW FACE",
+                        new Point(face.X, face.Y - 10),
+                        FontFace.HersheySimplex, 0.6, new MCvScalar(255, 165, 0), 2);
+                }
+
+                UpdateRecognitionStatus("● New face - Ready to register", Color.DodgerBlue);
+
+                // ENABLE Add button for new faces
+                SetAddButtonState(true, "ADD");
+            }
+            else
+            {
+                _recognizedEmpId = null;
+                _recognizedEmpName = null;
+                _isRecognitionStable = false;
+                UpdateRecognitionStatus("● No face detected", Color.Gray);
+
+                // DISABLE Add button when no face detected
+                SetAddButtonState(false, "No Face");
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        System.Diagnostics.Debug.WriteLine($"Face recognition error: {ex.Message}");
+    }
+}
+
+/// <summary>
+/// Enable or disable the Add button based on face detection status (thread-safe)
+/// </summary>
+private void SetAddButtonState(bool enabled, string text)
+{
+    if (BtnAdd.InvokeRequired)
+    {
+        BtnAdd.Invoke(new Action(() =>
+        {
+            BtnAdd.Enabled = enabled;
+            BtnAdd.Text = text;
+            
+            // Visual feedback - change button appearance based on state
+            if (enabled)
+            {
+                BtnAdd.FillColor = Color.FromArgb(34, 197, 94); // Green for enabled
+            }
+            else
+            {
+                BtnAdd.FillColor = Color.FromArgb(156, 163, 175); // Gray for disabled
+            }
+        }));
+    }
+    else
+    {
+        BtnAdd.Enabled = enabled;
+        BtnAdd.Text = text;
+        
+        if (enabled)
+        {
+            BtnAdd.FillColor = Color.FromArgb(34, 197, 94); // Green
+        }
+        else
+        {
+            BtnAdd.FillColor = Color.FromArgb(156, 163, 175); // Gray
+        }
+    }
+}
+
+/// <summary>
+/// Update recognition status label (thread-safe)
+/// </summary>
+private void UpdateRecognitionStatus(string text, Color color)
+{
+    if (lblRecognitionStatus == null) return;
+
+    if (lblRecognitionStatus.InvokeRequired)
+    {
+        lblRecognitionStatus.Invoke(new Action(() =>
+        {
+            lblRecognitionStatus.Text = text;
+            lblRecognitionStatus.ForeColor = color;
+        }));
+    }
+    else
+    {
+        lblRecognitionStatus.Text = text;
+        lblRecognitionStatus.ForeColor = color;
+    }
+}
 
         #endregion
 
@@ -695,7 +893,6 @@ namespace AttendanceFaceRocog
                 BtnAdd.Enabled = false;
                 BtnAdd.Text = "Checking...";
                 
-                // Small delay for UI update
                 await Task.Delay(100);
 
                 // Check if face already exists in the system
@@ -705,14 +902,12 @@ namespace AttendanceFaceRocog
                 {
                     var (existingEmpId, confidence, isStable) = recognitionResult.Value;
                     
-                    // If confidence is high enough, face is already registered
-                    if (confidence > 70) // Adjust threshold as needed (70-80 is good)
+                    if (confidence > 70)
                     {
                         var existingEmployee = DatabaseHelper.GetEmployeeById(existingEmpId);
                         
                         if (existingEmployee.HasValue)
                         {
-                            // Re-enable button
                             BtnAdd.Enabled = true;
                             BtnAdd.Text = "ADD";
                             
@@ -724,8 +919,6 @@ namespace AttendanceFaceRocog
                                 $"🆔 Code: {existingEmployee.Value.empCode}\n" +
                                 $"📊 Match Confidence: {confidence:F1}%\n" +
                                 $"━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
-                                $"Adding the same person multiple times can cause\n" +
-                                $"conflicts in the attendance system.\n\n" +
                                 $"Do you still want to proceed?",
                                 "⚠️ Duplicate Face Warning",
                                 MessageBoxButtons.YesNo,
@@ -733,7 +926,7 @@ namespace AttendanceFaceRocog
                         
                             if (result == DialogResult.No)
                             {
-                                return; // Don't add duplicate
+                                return;
                             }
                         }
                     }
@@ -743,18 +936,33 @@ namespace AttendanceFaceRocog
                 BtnAdd.Text = "Saving...";
                 await Task.Delay(100);
 
-                // Proceed with adding the employee
+                // Add employee to database first to get the empId
                 int empId = DatabaseHelper.AddEmployee(TxtEnterName.Text);
                 
-                string faceImagePath = Path.Combine(
-                    AppDomain.CurrentDomain.BaseDirectory,
-                    "FaceImages",
-                    $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}.jpg"
-                );
+                // *** FIX: Use FaceRecognitionService.CaptureFace() to properly extract and normalize the face ***
+                string? faceImagePath = _faceService.CaptureFace(_lastFrame, empId);
+                
+                if (string.IsNullOrEmpty(faceImagePath))
+                {
+                    // Face not detected or not close enough - rollback employee add
+                    DatabaseHelper.DeleteEmployee(empId);
+                    
+                    BtnAdd.Enabled = true;
+                    BtnAdd.Text = "ADD";
+                    
+                    MessageBox.Show(
+                        "❌ Could not capture face!\n\n" +
+                        "Please ensure:\n" +
+                        "• Your face is clearly visible\n" +
+                        "• You are close enough to the camera\n" +
+                        "• There is good lighting",
+                        "Face Capture Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
 
-                Directory.CreateDirectory(Path.GetDirectoryName(faceImagePath)!);
-                _lastFrame.ToBitmap().Save(faceImagePath);
-
+                // Save face image reference to database
                 DatabaseHelper.AddFaceImage(empId, faceImagePath);
 
                 // Retrain the model with the new face

@@ -74,13 +74,17 @@ namespace AttendanceFaceRocog
         {
             try
             {
+                string cascadePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "haarcascade_frontalface_default.xml");
+                System.Diagnostics.Debug.WriteLine($"Looking for cascade at: {cascadePath}");
+                System.Diagnostics.Debug.WriteLine($"File exists: {File.Exists(cascadePath)}");
+                
                 _faceService = new FaceRecognitionService();
                 _faceService.TrainModel();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error initializing face service: {ex.Message}");
-                MessageBox.Show("Error initializing face recognition service. Face detection may not work properly.",
+                MessageBox.Show($"Error: {ex.Message}\n\nInner: {ex.InnerException?.Message}",
                     "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
@@ -223,9 +227,8 @@ namespace AttendanceFaceRocog
                     // 9:00 AM - 11:59 AM - Auto Time In (if not already done)
                     if (status.hasTimeIn)
                     {
-                        MessageBox.Show("Time In has already been recorded for today.\n\nPlease select another action manually if needed.",
-                            "Already Recorded", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        return ShowAfternoonDialog(); // Show all options
+                        ShowAlreadyTimedInMessage();
+                        return null; // Don't show dialog, just display profile
                     }
                     return "TimeIn";
 
@@ -234,8 +237,18 @@ namespace AttendanceFaceRocog
                     return ShowLunchBreakDialog();
 
                 case AttendancePeriod.AfternoonWork:
-                    // 1:01 PM - 5:59 PM - Manual selection
-                    return ShowAfternoonDialog();
+                    // 1:00 PM - 5:59 PM - Auto Time In (if not already done)
+                    if (!status.hasTimeIn)
+                    {
+                        // Automatically Time In
+                        return "TimeIn";
+                    }
+                    else
+                    {
+                        // Already timed in - show message and display profile details
+                        ShowAlreadyTimedInMessage();
+                        return null; // Return null to skip logging, profile will be displayed
+                    }
 
                 case AttendancePeriod.AfterWork:
                     // After 6:00 PM - Auto Time Out (if not already done)
@@ -249,6 +262,35 @@ namespace AttendanceFaceRocog
 
                 default:
                     return null;
+            }
+        }
+
+        /// <summary>
+        /// Shows message when employee has already timed in and displays their profile
+        /// </summary>
+        private void ShowAlreadyTimedInMessage()
+        {
+            if (!_recognizedEmpId.HasValue) return;
+            
+            var empDetails = DatabaseHelper.GetEmployeeById(_recognizedEmpId.Value);
+            if (empDetails.HasValue)
+            {
+                // Display the employee profile
+                DisplayAttendanceConfirmation(empDetails.Value.empId, empDetails.Value.fullName, "Already Logged");
+                
+                MessageBox.Show(
+                    $"✓ Welcome back, {empDetails.Value.fullName}!\n\n" +
+                    $"Time In has already been recorded for today.\n" +
+                    $"Your attendance is confirmed.",
+                    "Already Timed In",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                
+                // Mark as logged to prevent re-processing
+                _hasLoggedAttendance = true;
+                
+                // Start auto-clear timer to reset the UI
+                StartAutoClearTimer();
             }
         }
 
@@ -711,9 +753,10 @@ namespace AttendanceFaceRocog
 
                 if (string.IsNullOrEmpty(action))
                 {
-                    // User cancelled or no action determined
+                    // Action was handled internally (e.g., already timed in message shown)
+                    // or user cancelled - stop camera but don't restart immediately
                     _isProcessingAttendance = false;
-                    _hasLoggedAttendance = false;
+                    StopCamera();
                     return;
                 }
 

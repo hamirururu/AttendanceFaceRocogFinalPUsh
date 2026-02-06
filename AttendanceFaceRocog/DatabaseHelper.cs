@@ -354,42 +354,19 @@ namespace AttendanceFaceRocog
         {
             using var conn = GetConnection();
             conn.Open();
-
-            // Start transaction to ensure data integrity
-            using var transaction = conn.BeginTransaction();
-
-            try
+            
+            // Delete face images first (foreign key constraint)
+            using (var cmd = new SqlCommand("DELETE FROM FaceImages WHERE empID = @empId", conn))
             {
-                // Delete face images
-                string deleteFacesQuery = "DELETE FROM dbo.FaceImages WHERE empID = @empID";
-                using (var cmd = new SqlCommand(deleteFacesQuery, conn, transaction))
-                {
-                    cmd.Parameters.AddWithValue("@empID", empId);
-                    cmd.ExecuteNonQuery();
-                }
-
-                // Delete attendance records
-                string deleteAttendanceQuery = "DELETE FROM dbo.Attendance WHERE empID = @empID";
-                using (var cmd = new SqlCommand(deleteAttendanceQuery, conn, transaction))
-                {
-                    cmd.Parameters.AddWithValue("@empID", empId);
-                    cmd.ExecuteNonQuery();
-                }
-
-                // Delete employee
-                string deleteEmployeeQuery = "DELETE FROM dbo.Employees WHERE empID = @empID";
-                using (var cmd = new SqlCommand(deleteEmployeeQuery, conn, transaction))
-                {
-                    cmd.Parameters.AddWithValue("@empID", empId);
-                    cmd.ExecuteNonQuery();
-                }
-
-                transaction.Commit();
+                cmd.Parameters.AddWithValue("@empId", empId);
+                cmd.ExecuteNonQuery();
             }
-            catch
+            
+            // Delete employee
+            using (var cmd = new SqlCommand("DELETE FROM Employees WHERE empID = @empId", conn))
             {
-                transaction.Rollback();
-                throw;
+                cmd.Parameters.AddWithValue("@empId", empId);
+                cmd.ExecuteNonQuery();
             }
         }
     }
