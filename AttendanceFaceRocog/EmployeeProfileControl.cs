@@ -29,9 +29,9 @@ namespace AttendanceFaceRocog
         {
             InitializeComponent();
             
-            // Initialize face service WITH training (same as UserControl1)
-            _faceService = new FaceRecognitionService();
-            _faceService.TrainModel();  // <-- THIS WAS MISSING!
+            // Use singleton instance - same instance as UserControl1
+            _faceService = FaceRecognitionService.Instance;
+            _faceService.TrainModel();
             
             SetupButtonEvents();
             SetupSearchEvent();
@@ -69,13 +69,14 @@ namespace AttendanceFaceRocog
         #region Profile Display & Search
 
         /// <summary>
-        /// Load all employee profiles into the panel
+        /// Load all employee profiles into the panel (ONE per employee)
         /// </summary>
         private void LoadAllProfiles()
         {
             try
             {
-                _allEmployees = DatabaseHelper.GetAllEmployeesWithFaces();
+                // Use the display method that returns ONE row per employee
+                _allEmployees = DatabaseHelper.GetAllEmployeesForDisplay();
                 DisplayProfiles(_allEmployees);
             }
             catch (Exception ex)
@@ -149,16 +150,15 @@ namespace AttendanceFaceRocog
                 BackColor = Color.White
             };
 
-            // Add profile cards
+            // Add profile cards - ONE per employee
             foreach (DataRow row in employees.Rows)
             {
-                var profileCard = CreateProfileCard(
-                    Convert.ToInt32(row["empID"]),
-                    row["empCode"].ToString() ?? "",
-                    Convert.ToInt32(row["empID"]),
-                    row["FullName"].ToString() ?? "",
-                    row["imgPath"].ToString() ?? ""
-                );
+                int empId = Convert.ToInt32(row["empID"]);
+                string empCode = row["empCode"]?.ToString() ?? "";
+                string fullName = row["FullName"]?.ToString() ?? "";
+                string imagePath = row["imgPath"] != DBNull.Value ? row["imgPath"].ToString() ?? "" : "";
+
+                var profileCard = CreateProfileCard(empId, empCode, empId, fullName, imagePath);
                 flowPanel.Controls.Add(profileCard);
             }
 
@@ -176,7 +176,8 @@ namespace AttendanceFaceRocog
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.None,
                 Margin = new Padding(5),
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                Tag = empId
             };
 
             // Add border effect
@@ -194,73 +195,88 @@ namespace AttendanceFaceRocog
                 Size = new Size(70, 70),
                 Location = new Point(15, 15),
                 SizeMode = PictureBoxSizeMode.StretchImage,
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(240, 240, 240)
             };
 
             // Load image or default avatar
-            if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+            try
             {
-                try
+                if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                 {
-                    using (var img = Image.FromFile(imagePath))
-                    {
-                        picProfile.Image = new Bitmap(img);
-                    }
+                    picProfile.Image = Image.FromFile(imagePath);
                 }
-                catch
+                else
                 {
-                    picProfile.Image = CreateDefaultAvatar();
+                    picProfile.Image = CreateDefaultAvatar(fullName);
                 }
             }
-            else
+            catch
             {
-                picProfile.Image = CreateDefaultAvatar();
+                picProfile.Image = CreateDefaultAvatar(fullName);
             }
+
+            card.Controls.Add(picProfile);
 
             // Employee name
             var lblName = new Label
             {
                 Text = fullName,
-                Font = new Font("Poppins", 11F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(55, 65, 81),
                 Location = new Point(100, 20),
                 AutoSize = true
             };
+            card.Controls.Add(lblName);
 
             // Employee code
             var lblCode = new Label
             {
-                Text = $"ID: {empCode}",
-                Font = new Font("Segoe UI", 9F),
-                ForeColor = Color.Gray,
-                Location = new Point(100, 45),
+                Text = empCode,
+                Font = new Font("Segoe UI", 10F),
+                ForeColor = Color.FromArgb(107, 114, 128),
+                Location = new Point(100, 50),
                 AutoSize = true
             };
-
-            // View button
-            var btnView = new Guna.UI2.WinForms.Guna2Button
-            {
-                Text = "View Details",
-                Size = new Size(120, 35),
-                Location = new Point(card.Width - 140, 32),
-                BorderRadius = 8,
-                FillColor = Color.FromArgb(99, 102, 241),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-
-            btnView.Click += (s, e) => ShowEmployeeDetails(empId, empCode, fullName, imagePath);
-
-            card.Controls.Add(picProfile);
-            card.Controls.Add(lblName);
             card.Controls.Add(lblCode);
-            card.Controls.Add(btnView);
 
-            // Click anywhere on card to view details
+            // Click event for the card - pass all required parameters
             card.Click += (s, e) => ShowEmployeeDetails(empId, empCode, fullName, imagePath);
+            picProfile.Click += (s, e) => ShowEmployeeDetails(empId, empCode, fullName, imagePath);
+            lblName.Click += (s, e) => ShowEmployeeDetails(empId, empCode, fullName, imagePath);
+            lblCode.Click += (s, e) => ShowEmployeeDetails(empId, empCode, fullName, imagePath);
 
             return card;
+        }
+
+        /// <summary>
+        /// Create a default avatar with initials
+        /// </summary>
+        private Image CreateDefaultAvatar(string name)
+        {
+            var bmp = new Bitmap(70, 70);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.FillRectangle(new SolidBrush(Color.FromArgb(99, 102, 241)), 0, 0, 70, 70);
+                
+                // Get initials
+                string initials = "";
+                var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                    initials = $"{parts[0][0]}{parts[^1][0]}".ToUpper();
+                else if (parts.Length == 1 && parts[0].Length > 0)
+                    initials = parts[0][0].ToString().ToUpper();
+                else
+                    initials = "?";
+
+                using var font = new Font("Segoe UI", 20F, FontStyle.Bold);
+                var size = g.MeasureString(initials, font);
+                g.DrawString(initials, font, Brushes.White, 
+                    (70 - size.Width) / 2, 
+                    (70 - size.Height) / 2);
+            }
+            return bmp;
         }
 
         /// <summary>
@@ -374,12 +390,11 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Refresh profile list (call after adding/editing/deleting)
+        /// Refresh profiles list
         /// </summary>
-        public void RefreshProfiles()
+        private void RefreshProfiles()
         {
             LoadAllProfiles();
-            TxtSearchBar.Clear();
         }
 
         #endregion
@@ -889,13 +904,12 @@ private void UpdateRecognitionStatus(string text, Color color)
 
             try
             {
-                // Disable buttons during processing
                 BtnAdd.Enabled = false;
                 BtnAdd.Text = "Checking...";
                 
                 await Task.Delay(100);
 
-                // Check if face already exists in the system
+                // Check if face already exists
                 var recognitionResult = _faceService.RecognizeFace(_lastFrame);
                 
                 if (recognitionResult.HasValue)
@@ -932,19 +946,17 @@ private void UpdateRecognitionStatus(string text, Color color)
                     }
                 }
 
-                // Update button text
-                BtnAdd.Text = "Saving...";
+                BtnAdd.Text = "Capturing...";
                 await Task.Delay(100);
 
-                // Add employee to database first to get the empId
+                // Add employee to database
                 int empId = DatabaseHelper.AddEmployee(TxtEnterName.Text);
                 
-                // *** FIX: Use FaceRecognitionService.CaptureFace() to properly extract and normalize the face ***
-                string? faceImagePath = _faceService.CaptureFace(_lastFrame, empId);
+                // Capture MULTIPLE face variations for better training
+                List<string> faceImagePaths = _faceService.CaptureMultipleFaces(_lastFrame, empId, 5);
                 
-                if (string.IsNullOrEmpty(faceImagePath))
+                if (faceImagePaths.Count == 0)
                 {
-                    // Face not detected or not close enough - rollback employee add
                     DatabaseHelper.DeleteEmployee(empId);
                     
                     BtnAdd.Enabled = true;
@@ -962,10 +974,13 @@ private void UpdateRecognitionStatus(string text, Color color)
                     return;
                 }
 
-                // Save face image reference to database
-                DatabaseHelper.AddFaceImage(empId, faceImagePath);
+                // Save all face image paths to database
+                foreach (string path in faceImagePaths)
+                {
+                    DatabaseHelper.AddFaceImage(empId, path);
+                }
 
-                // Retrain the model with the new face
+                // Retrain the model with the new faces
                 BtnAdd.Text = "Training...";
                 await Task.Run(() => _faceService.TrainModel());
 
@@ -974,7 +989,7 @@ private void UpdateRecognitionStatus(string text, Color color)
                     $"━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
                     $"👤 Name: {TxtEnterName.Text}\n" +
                     $"🆔 Code: EMP-{empId:D3}\n" +
-                    $"📸 Face image saved and trained\n" +
+                    $"📸 {faceImagePaths.Count} face images captured & trained\n" +
                     $"━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
                     $"The new employee can now use face recognition\n" +
                     $"for attendance tracking.",
@@ -982,7 +997,6 @@ private void UpdateRecognitionStatus(string text, Color color)
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
 
-                // Clear and refresh
                 TxtEnterName.Clear();
                 StopCamera();
                 BtnAdd.Enabled = true;

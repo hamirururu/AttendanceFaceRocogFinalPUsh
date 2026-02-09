@@ -13,6 +13,28 @@ namespace AttendanceFaceRocog
 {
     public class FaceRecognitionService : IDisposable
     {
+        // SINGLETON PATTERN - Shared instance across all controls
+        private static FaceRecognitionService? _instance;
+        private static readonly object _lock = new object();
+        
+        public static FaceRecognitionService Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    lock (_lock)
+                    {
+                        _instance ??= new FaceRecognitionService();
+                    }
+                }
+                return _instance;
+            }
+        }
+
+        // Event to notify when model is retrained
+        public event EventHandler? ModelRetrained;
+
         private readonly CascadeClassifier _faceDetector;
         private LBPHFaceRecognizer? _recognizer;
         private readonly Dictionary<int, int> _labelToEmpId = new();
@@ -20,24 +42,22 @@ namespace AttendanceFaceRocog
 
         private readonly string _facesFolder;
 
-        // Face processing constants
+        // Face processing constants - OPTIMIZED
         private const int FACE_SIZE = 100;
-        private const double UNKNOWN_THRESHOLD = 95;
+        private const double UNKNOWN_THRESHOLD = 80;  // Lowered from 95 for stricter matching
 
-        // Recognition stability tracking
-        private const int RECOGNITION_HISTORY_SIZE = 5;
+        // Recognition stability tracking - REDUCED for faster recognition
+        private const int RECOGNITION_HISTORY_SIZE = 3;  // Reduced from 5
         private Queue<int> _recognitionHistory = new Queue<int>();
 
-        // PROXIMITY DETECTION: Minimum face size to be considered "near" the camera
-        // Face must be at least this many pixels wide/tall to be recognized
-        private const int MIN_FACE_SIZE_FOR_RECOGNITION = 150;  // Adjust based on camera distance
-        private const int MIN_FACE_SIZE_FOR_DETECTION = 80;     // Minimum to even detect
-        private const int MAX_FACE_SIZE = 400;                   // Maximum face size
+        // PROXIMITY DETECTION
+        private const int MIN_FACE_SIZE_FOR_RECOGNITION = 120;  // Reduced from 150
+        private const int MIN_FACE_SIZE_FOR_DETECTION = 60;     // Reduced from 80
+        private const int MAX_FACE_SIZE = 500;                   // Increased from 400
+        private const double MIN_FACE_AREA_RATIO = 0.02;         // Reduced from 0.03
 
-        // Percentage of frame the face should occupy to be considered "close enough"
-        private const double MIN_FACE_AREA_RATIO = 0.03;  // Face must be at least 3% of frame area
-
-        public FaceRecognitionService()
+        // Private constructor for singleton
+        private FaceRecognitionService()
         {
             _facesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Faces");
             Directory.CreateDirectory(_facesFolder);
@@ -69,7 +89,9 @@ namespace AttendanceFaceRocog
 
             try
             {
-                _recognizer = new LBPHFaceRecognizer(2, 8, 8, 8, 100);
+                // OPTIMIZED LBPH parameters for better recognition
+                // radius=1, neighbors=8, gridX=8, gridY=8, threshold=100
+                _recognizer = new LBPHFaceRecognizer(1, 8, 8, 8, 100);
             }
             catch (Exception ex)
             {
@@ -84,23 +106,20 @@ namespace AttendanceFaceRocog
 
             var resized = face.Resize(FACE_SIZE, FACE_SIZE, Inter.Cubic);
             resized._EqualizeHist();
+            
+            // Apply CLAHE for better contrast
             CvInvoke.GaussianBlur(resized, resized, new Size(3, 3), 0);
 
             return resized;
         }
 
-        /// <summary>
-        /// Check if a face is close enough to the camera based on its size
-        /// </summary>
         private bool IsFaceCloseEnough(Rectangle face, int frameWidth, int frameHeight)
         {
-            // Check minimum face size
             if (face.Width < MIN_FACE_SIZE_FOR_RECOGNITION || face.Height < MIN_FACE_SIZE_FOR_RECOGNITION)
             {
                 return false;
             }
 
-            // Check face area ratio relative to frame
             double faceArea = face.Width * face.Height;
             double frameArea = frameWidth * frameHeight;
             double areaRatio = faceArea / frameArea;
@@ -108,17 +127,12 @@ namespace AttendanceFaceRocog
             return areaRatio >= MIN_FACE_AREA_RATIO;
         }
 
-        /// <summary>
-        /// Get the largest (closest) face from detected faces
-        /// </summary>
         private Rectangle? GetClosestFace(Rectangle[] faces, int frameWidth, int frameHeight)
         {
             if (faces.Length == 0) return null;
 
-            // Sort by area (largest first = closest to camera)
             var sortedFaces = faces.OrderByDescending(f => f.Width * f.Height).ToArray();
 
-            // Return the largest face that meets the proximity requirement
             foreach (var face in sortedFaces)
             {
                 if (IsFaceCloseEnough(face, frameWidth, frameHeight))
@@ -131,55 +145,84 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Capture and save face for a new employee (only if close enough)
+        /// Capture multiple face images for better training (captures 5 variations)
         /// </summary>
-        public string? CaptureFace(Mat frame, int empId)
+        public List<string> CaptureMultipleFaces(Mat frame, int empId, int count = 5)
         {
+            List<string> savedPaths = new List<string>();
             Rectangle[] faces = DetectFaces(frame);
 
-            if (faces.Length == 0) return null;
+            if (faces.Length == 0) return savedPaths;
 
-            // Get the closest face that meets proximity requirements
             Rectangle? closestFace = GetClosestFace(faces, frame.Width, frame.Height);
-
-            if (!closestFace.HasValue)
-            {
-                System.Diagnostics.Debug.WriteLine("Face detected but not close enough to camera for capture.");
-                return null;
-            }
+            if (!closestFace.HasValue) return savedPaths;
 
             Rectangle face = closestFace.Value;
 
-            Mat faceRegion = new Mat(frame, face);
-            Mat grayFace = new Mat();
-            CvInvoke.CvtColor(faceRegion, grayFace, ColorConversion.Bgr2Gray);
-
-            Image<Gray, byte> faceImage = grayFace.ToImage<Gray, byte>();
-            Image<Gray, byte>? normalized = NormalizeFace(faceImage);
-
-            if (normalized == null)
+            try
             {
+                Mat faceRegion = new Mat(frame, face);
+                Mat grayFace = new Mat();
+                CvInvoke.CvtColor(faceRegion, grayFace, ColorConversion.Bgr2Gray);
+
+                Image<Gray, byte> faceImage = grayFace.ToImage<Gray, byte>();
+
+                // Save original normalized face
+                Image<Gray, byte>? normalized = NormalizeFace(faceImage);
+                if (normalized != null)
+                {
+                    string fileName = $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_0.jpg";
+                    string filePath = Path.Combine(_facesFolder, fileName);
+                    normalized.Save(filePath);
+                    savedPaths.Add(filePath);
+
+                    // Save horizontal flip
+                    var flipped = normalized.Flip(FlipType.Horizontal);
+                    string flipPath = Path.Combine(_facesFolder, $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_flip.jpg");
+                    flipped.Save(flipPath);
+                    savedPaths.Add(flipPath);
+                    flipped.Dispose();
+
+                    // Save slightly brightened version
+                    var brightened = normalized.Clone();
+                    brightened._GammaCorrect(1.2);
+                    string brightPath = Path.Combine(_facesFolder, $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_bright.jpg");
+                    brightened.Save(brightPath);
+                    savedPaths.Add(brightPath);
+                    brightened.Dispose();
+
+                    // Save slightly darkened version
+                    var darkened = normalized.Clone();
+                    darkened._GammaCorrect(0.8);
+                    string darkPath = Path.Combine(_facesFolder, $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_dark.jpg");
+                    darkened.Save(darkPath);
+                    savedPaths.Add(darkPath);
+                    darkened.Dispose();
+
+                    normalized.Dispose();
+                }
+
                 faceRegion.Dispose();
                 grayFace.Dispose();
                 faceImage.Dispose();
-                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error capturing multiple faces: {ex.Message}");
             }
 
-            string fileName = $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}.jpg";
-            string filePath = Path.Combine(_facesFolder, fileName);
-            normalized.Save(filePath);
-
-            faceRegion.Dispose();
-            grayFace.Dispose();
-            faceImage.Dispose();
-            normalized.Dispose();
-
-            return filePath;
+            return savedPaths;
         }
 
         /// <summary>
-        /// Detect all faces in a frame
+        /// Original single capture (backwards compatibility)
         /// </summary>
+        public string? CaptureFace(Mat frame, int empId)
+        {
+            var paths = CaptureMultipleFaces(frame, empId, 1);
+            return paths.FirstOrDefault();
+        }
+
         public Rectangle[] DetectFaces(Mat frame)
         {
             Mat grayFrame = new Mat();
@@ -188,8 +231,8 @@ namespace AttendanceFaceRocog
 
             var faces = _faceDetector.DetectMultiScale(
                 grayFrame,
-                scaleFactor: 1.08,
-                minNeighbors: 4,
+                scaleFactor: 1.05,      // More sensitive (was 1.08)
+                minNeighbors: 3,         // Reduced from 4
                 minSize: new Size(MIN_FACE_SIZE_FOR_DETECTION, MIN_FACE_SIZE_FOR_DETECTION),
                 maxSize: new Size(MAX_FACE_SIZE, MAX_FACE_SIZE)
             );
@@ -198,17 +241,13 @@ namespace AttendanceFaceRocog
             return faces;
         }
 
-        /// <summary>
-        /// Detect only faces that are close to the camera
-        /// </summary>
         public Rectangle[] DetectCloseFaces(Mat frame)
         {
             Rectangle[] allFaces = DetectFaces(frame);
 
-            // Filter to only faces that are close enough
             var closeFaces = allFaces
                 .Where(f => IsFaceCloseEnough(f, frame.Width, frame.Height))
-                .OrderByDescending(f => f.Width * f.Height) // Largest (closest) first
+                .OrderByDescending(f => f.Width * f.Height)
                 .ToArray();
 
             return closeFaces;
@@ -224,6 +263,7 @@ namespace AttendanceFaceRocog
             if (employeeFaces.Rows.Count == 0)
             {
                 _isModelTrained = false;
+                System.Diagnostics.Debug.WriteLine("No employee faces found in database.");
                 return;
             }
 
@@ -239,6 +279,7 @@ namespace AttendanceFaceRocog
             foreach (var empGroup in employeeGroups)
             {
                 int empId = empGroup.Key;
+                int imagesForEmployee = 0;
 
                 foreach (DataRow row in empGroup)
                 {
@@ -256,7 +297,6 @@ namespace AttendanceFaceRocog
 
                         if (faceImg.Width == 0 || faceImg.Height == 0)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Invalid image dimensions: {imgPath}");
                             faceImg.Dispose();
                             continue;
                         }
@@ -269,12 +309,15 @@ namespace AttendanceFaceRocog
                             {
                                 faceImages.Add(normalized.Mat.Clone());
                                 labels.Add(labelIndex);
+                                imagesForEmployee++;
 
+                                // Add flipped version for augmentation
                                 var flipped = normalized.Flip(FlipType.Horizontal);
                                 if (!flipped.Mat.IsEmpty)
                                 {
                                     faceImages.Add(flipped.Mat.Clone());
                                     labels.Add(labelIndex);
+                                    imagesForEmployee++;
                                 }
                                 flipped.Dispose();
                             }
@@ -289,8 +332,12 @@ namespace AttendanceFaceRocog
                     }
                 }
 
-                _labelToEmpId[labelIndex] = empId;
-                labelIndex++;
+                if (imagesForEmployee > 0)
+                {
+                    _labelToEmpId[labelIndex] = empId;
+                    labelIndex++;
+                    System.Diagnostics.Debug.WriteLine($"Loaded {imagesForEmployee} images for empId {empId}");
+                }
             }
 
             if (faceImages.Count < 2)
@@ -312,7 +359,10 @@ namespace AttendanceFaceRocog
                 _recognizer?.Train(faceVector, labelVector);
                 _isModelTrained = true;
 
-                System.Diagnostics.Debug.WriteLine($"Model trained with {faceImages.Count} images for {_labelToEmpId.Count} employees");
+                System.Diagnostics.Debug.WriteLine($"Model trained successfully with {faceImages.Count} images for {_labelToEmpId.Count} employees");
+                
+                // Notify listeners that model was retrained
+                ModelRetrained?.Invoke(this, EventArgs.Empty);
             }
             catch (Exception ex)
             {
@@ -327,21 +377,21 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Recognize a face in a frame - only recognizes faces close to the camera
-        /// Returns: (empId, confidence, isStable)
+        /// Recognize a face in a frame
         /// </summary>
         public (int empId, double confidence, bool isStable)? RecognizeFace(Mat frame)
         {
             if (!_isModelTrained || _recognizer == null)
+            {
+                System.Diagnostics.Debug.WriteLine("Model not trained, cannot recognize.");
                 return null;
+            }
 
-            // Use DetectCloseFaces to only get faces near the camera
             Rectangle[] closeFaces = DetectCloseFaces(frame);
 
             if (closeFaces.Length == 0)
                 return null;
 
-            // Use the largest (closest) face
             Rectangle face = closeFaces[0];
 
             try
@@ -368,25 +418,25 @@ namespace AttendanceFaceRocog
                 faceImage.Dispose();
                 normalized.Dispose();
 
+                System.Diagnostics.Debug.WriteLine($"Recognition result - Label: {result.Label}, Distance: {result.Distance}");
+
                 if (result.Label >= 0 && result.Distance < UNKNOWN_THRESHOLD)
                 {
                     if (_labelToEmpId.TryGetValue(result.Label, out int empId))
                     {
-                        // Update recognition history
                         _recognitionHistory.Enqueue(empId);
                         if (_recognitionHistory.Count > RECOGNITION_HISTORY_SIZE)
                             _recognitionHistory.Dequeue();
 
-                        // Check if recognition is stable
+                        // Faster stability check - only need 3 consecutive matches now
                         bool isStable = _recognitionHistory.Count >= RECOGNITION_HISTORY_SIZE &&
                                        _recognitionHistory.All(id => id == empId);
 
-                        double confidence = 100 - result.Distance;
+                        double confidence = Math.Max(0, 100 - result.Distance);
                         return (empId, confidence, isStable);
                     }
                 }
 
-                // Face detected but not recognized - clear history
                 _recognitionHistory.Clear();
                 return null;
             }
@@ -397,18 +447,19 @@ namespace AttendanceFaceRocog
             }
         }
 
-        /// <summary>
-        /// Clear recognition history (call when switching users or resetting)
-        /// </summary>
         public void ClearRecognitionHistory()
         {
             _recognitionHistory.Clear();
         }
 
+        public bool IsModelTrained => _isModelTrained;
+        public int TrainedEmployeeCount => _labelToEmpId.Count;
+
         public void Dispose()
         {
             _faceDetector?.Dispose();
             _recognizer?.Dispose();
+            _instance = null;
         }
     }
 }

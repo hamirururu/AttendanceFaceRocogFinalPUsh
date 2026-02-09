@@ -47,6 +47,14 @@ namespace AttendanceFaceRocog
         private static readonly TimeSpan LUNCH_END = new TimeSpan(13, 0, 0);           // 1:00 PM
         private static readonly TimeSpan AFTERNOON_WORK_END = new TimeSpan(18, 0, 0);  // 6:00 PM
 
+        // Auto camera on/off based on face presence
+        private System.Windows.Forms.Timer? _facePresenceTimer;
+        private const int NO_FACE_TIMEOUT_MS = 3000;  // Turn off after 3 seconds of no face
+        private int _noFaceFrameCount = 0;
+        private const int NO_FACE_FRAME_THRESHOLD = 30;  // ~1 second at 30fps
+        private bool _isCameraStandby = false;
+        private Panel? _standbyOverlay;
+
         #endregion
 
         #region Constructor & Initialization
@@ -57,6 +65,7 @@ namespace AttendanceFaceRocog
             CreateStatusLabel();
             InitializeProfilePanel();
             InitializeAutoClearTimer();
+            InitializeFacePresenceTimer();  // Add this line
             
             // Initialize face service in constructor to avoid null reference
             InitializeFaceService();
@@ -74,12 +83,14 @@ namespace AttendanceFaceRocog
         {
             try
             {
-                string cascadePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "haarcascade_frontalface_default.xml");
-                System.Diagnostics.Debug.WriteLine($"Looking for cascade at: {cascadePath}");
-                System.Diagnostics.Debug.WriteLine($"File exists: {File.Exists(cascadePath)}");
-                
-                _faceService = new FaceRecognitionService();
+                // Use singleton instance - shared across all controls
+                _faceService = FaceRecognitionService.Instance;
                 _faceService.TrainModel();
+                
+                // Subscribe to model retrained event
+                _faceService.ModelRetrained += OnModelRetrained;
+                
+                System.Diagnostics.Debug.WriteLine($"Face service initialized. Trained: {_faceService.IsModelTrained}, Employees: {_faceService.TrainedEmployeeCount}");
             }
             catch (Exception ex)
             {
@@ -87,6 +98,14 @@ namespace AttendanceFaceRocog
                 MessageBox.Show($"Error: {ex.Message}\n\nInner: {ex.InnerException?.Message}",
                     "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
+        }
+
+        /// <summary>
+        /// Called when face model is retrained (e.g., new employee added)
+        /// </summary>
+        private void OnModelRetrained(object? sender, EventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine("Model retrained - recognition updated with new faces");
         }
 
         /// <summary>
@@ -177,6 +196,30 @@ namespace AttendanceFaceRocog
                 TextAlign = ContentAlignment.MiddleCenter
             };
             pnlStatusBadge.Controls.Add(lblStatus);
+        }
+
+        /// <summary>
+        /// Initialize timer for face presence detection (auto on/off)
+        /// </summary>
+        private void InitializeFacePresenceTimer()
+        {
+            _facePresenceTimer = new System.Windows.Forms.Timer();
+            _facePresenceTimer.Interval = NO_FACE_TIMEOUT_MS;
+            _facePresenceTimer.Tick += FacePresenceTimer_Tick;
+        }
+
+        /// <summary>
+        /// Called when no face detected for the timeout period
+        /// </summary>
+        private void FacePresenceTimer_Tick(object? sender, EventArgs e)
+        {
+            _facePresenceTimer?.Stop();
+            
+            // Only go to standby if not processing attendance
+            if (!_isProcessingAttendance && !_hasLoggedAttendance)
+            {
+                EnterStandbyMode();
+            }
         }
 
         #endregion
@@ -571,6 +614,10 @@ namespace AttendanceFaceRocog
         {
             if (!_isCameraRunning) return;
 
+            _facePresenceTimer?.Stop();
+            _isCameraStandby = false;
+            _noFaceFrameCount = 0;
+
             if (_capture != null)
             {
                 _capture.ImageGrabbed -= ProcessFrame;
@@ -580,10 +627,15 @@ namespace AttendanceFaceRocog
             }
 
             _isCameraRunning = false;
-
-            if (picCamera != null)
+            
+            if (picCamera != null) 
             {
                 picCamera.Image = null;
+            }
+            
+            if (_standbyOverlay != null)
+            {
+                _standbyOverlay.Visible = false;
             }
 
             UpdateStatus("●  Ready to Scan", Color.FromArgb(156, 163, 175));
@@ -657,6 +709,15 @@ namespace AttendanceFaceRocog
 
                     if (emp.HasValue)
                     {
+                        // FACE DETECTED - Reset no-face counter and exit standby
+                        _noFaceFrameCount = 0;
+                        _facePresenceTimer?.Stop();
+                        
+                        if (_isCameraStandby)
+                        {
+                            ExitStandbyMode();
+                        }
+
                         _recognizedEmpId = emp.Value.empId;
                         _recognizedEmpName = emp.Value.fullName;
                         _isRecognitionStable = isStable;
@@ -697,6 +758,15 @@ namespace AttendanceFaceRocog
 
                     if (faces.Length > 0)
                     {
+                        // UNKNOWN FACE DETECTED - Still counts as face present
+                        _noFaceFrameCount = 0;
+                        _facePresenceTimer?.Stop();
+                        
+                        if (_isCameraStandby)
+                        {
+                            ExitStandbyMode();
+                        }
+
                         _recognizedEmpId = null;
                         _recognizedEmpName = null;
                         _isRecognitionStable = false;
@@ -712,10 +782,25 @@ namespace AttendanceFaceRocog
                     }
                     else
                     {
-                        _recognizedEmpId = null;
-                        _recognizedEmpName = null;
-                        _isRecognitionStable = false;
-                        UpdateStatus("●  Scanning...", Color.FromArgb(156, 163, 175));
+                        // NO FACE DETECTED - Increment counter
+                        _noFaceFrameCount++;
+                        
+                        if (_noFaceFrameCount >= NO_FACE_FRAME_THRESHOLD)
+                        {
+                            // Start timeout timer if not already running
+                            if (!_facePresenceTimer!.Enabled && !_isCameraStandby)
+                            {
+                                _facePresenceTimer.Start();
+                                UpdateStatus("●  No face - Going standby...", Color.FromArgb(156, 163, 175));
+                            }
+                        }
+                        else
+                        {
+                            _recognizedEmpId = null;
+                            _recognizedEmpName = null;
+                            _isRecognitionStable = false;
+                            UpdateStatus("●  Scanning...", Color.FromArgb(156, 163, 175));
+                        }
                     }
                 }
             }
@@ -1222,31 +1307,22 @@ namespace AttendanceFaceRocog
 
         #region Cleanup
 
-        public void Cleanup()
-        {
-            // Set flag first to prevent any new camera starts
-            _isCleanedUp = true;
-            _isAutoScanEnabled = false;
-            
-            _autoClearTimer?.Stop();
-            _autoClearTimer?.Dispose();
-            _autoClearTimer = null;
-            
-            StopCamera();
-            
-            if (_faceService != null)
-            {
-                try
-                {
-                    _faceService.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error disposing face service: {ex.Message}");
-                }
-                _faceService = null;
-            }
-        }
+        /// <summary>
+/// Cleanup all resources - call when control is being removed/hidden
+/// </summary>
+public void Cleanup()
+{
+    _isCleanedUp = true;
+    _isAutoScanEnabled = false;
+    
+    _facePresenceTimer?.Stop();
+    _facePresenceTimer?.Dispose();
+    _autoClearTimer?.Stop();
+    _autoClearTimer?.Dispose();
+    
+    StopCamera();
+    _faceService?.Dispose();
+}
 
         #endregion
 
@@ -1275,6 +1351,86 @@ namespace AttendanceFaceRocog
                 _isAutoScanEnabled = true;
                 AutoStartCamera();
             }
+        }
+
+        #endregion
+
+        #region New Methods for Standby Mode
+
+        /// <summary>
+        /// Enter standby mode - camera stays ready but shows overlay
+        /// </summary>
+        private void EnterStandbyMode()
+        {
+            if (_isCameraStandby || !_isCameraRunning) return;
+            
+            _isCameraStandby = true;
+            
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(EnterStandbyMode));
+                return;
+            }
+            
+            // Create standby overlay if not exists
+            if (_standbyOverlay == null)
+            {
+                _standbyOverlay = new Panel
+                {
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.FromArgb(20, 20, 20)
+                };
+                
+                var lblStandby = new Label
+                {
+                    Text = "👤\n\nApproach camera to scan",
+                    Font = new Font("Segoe UI", 14F, FontStyle.Regular),
+                    ForeColor = Color.FromArgb(120, 120, 120),
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Dock = DockStyle.Fill,
+                    BackColor = Color.Transparent
+                };
+                
+                _standbyOverlay.Controls.Add(lblStandby);
+            }
+            
+            // Show overlay on top of camera
+            if (!pnlScannerContainer.Controls.Contains(_standbyOverlay))
+            {
+                pnlScannerContainer.Controls.Add(_standbyOverlay);
+            }
+            _standbyOverlay.BringToFront();
+            _standbyOverlay.Visible = true;
+            
+            UpdateStatus("●  Waiting for face...", Color.FromArgb(100, 100, 100));
+            
+            System.Diagnostics.Debug.WriteLine("Camera entered standby mode");
+        }
+
+        /// <summary>
+        /// Exit standby mode - show live camera feed
+        /// </summary>
+        private void ExitStandbyMode()
+        {
+            if (!_isCameraStandby) return;
+            
+            _isCameraStandby = false;
+            
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(ExitStandbyMode));
+                return;
+            }
+            
+            // Hide standby overlay
+            if (_standbyOverlay != null)
+            {
+                _standbyOverlay.Visible = false;
+            }
+            
+            UpdateStatus("●  Face detected - Scanning...", Color.LimeGreen);
+            
+            System.Diagnostics.Debug.WriteLine("Camera exited standby mode");
         }
 
         #endregion

@@ -52,7 +52,40 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Get all employees with their face images
+        /// Get all employees with only ONE face image each (for profile display)
+        /// </summary>
+        public static DataTable GetAllEmployeesForDisplay()
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            // Use ROW_NUMBER() to get only the first/latest image per employee
+            string query = @"
+                WITH RankedImages AS (
+                    SELECT 
+                        e.empID, 
+                        e.empCode, 
+                        e.FullName, 
+                        f.imgPath,
+                        ROW_NUMBER() OVER (PARTITION BY e.empID ORDER BY f.faceImageID DESC) AS rn
+                    FROM dbo.Employees e
+                    LEFT JOIN dbo.FaceImages f ON e.empID = f.empID
+                )
+                SELECT empID, empCode, FullName, imgPath
+                FROM RankedImages
+                WHERE rn = 1
+                ORDER BY FullName";
+
+            using var cmd = new SqlCommand(query, conn);
+            using var adapter = new SqlDataAdapter(cmd);
+
+            DataTable dt = new DataTable();
+            adapter.Fill(dt);
+            return dt;
+        }
+
+        /// <summary>
+        /// Get all employees with their face images (for training - returns ALL images)
         /// </summary>
         public static DataTable GetAllEmployeesWithFaces()
         {
