@@ -35,7 +35,7 @@ namespace AttendanceFaceRocog
         // Event to notify when model is retrained
         public event EventHandler? ModelRetrained;
 
-        private readonly CascadeClassifier _faceDetector;
+        private CascadeClassifier? _faceDetector;
         private LBPHFaceRecognizer? _recognizer;
         private readonly Dictionary<int, int> _labelToEmpId = new();
         private bool _isModelTrained = false;
@@ -55,6 +55,12 @@ namespace AttendanceFaceRocog
         private const int MIN_FACE_SIZE_FOR_DETECTION = 60;     // Reduced from 80
         private const int MAX_FACE_SIZE = 500;                   // Increased from 400
         private const double MIN_FACE_AREA_RATIO = 0.02;         // Reduced from 0.03
+
+        // FACE DISTANCE DETECTION (for 15 inches)
+        private const double FACE_RECOGNITION_DISTANCE_INCHES = 15.0;
+        private const double AVERAGE_FACE_WIDTH_INCHES = 5.5;  // Average face width is approximately 5.5 inches
+        private const double CAMERA_FOCAL_LENGTH = 700.0;      // Calibrated focal length (adjust based on your camera)
+        private double _detectedFaceDistance = 0;
 
         // Private constructor for singleton
         private FaceRecognitionService()
@@ -77,14 +83,26 @@ namespace AttendanceFaceRocog
             {
                 _faceDetector = new CascadeClassifier(cascadePath);
 
+                // Verify cascade was loaded successfully
+                // CascadeClassifier doesn't expose an Empty property, so we just verify it's not null
                 if (_faceDetector == null)
                 {
-                    throw new Exception("Failed to initialize face detector - CascadeClassifier is null");
+                    throw new Exception("Failed to initialize CascadeClassifier - returned null.");
                 }
+
+                System.Diagnostics.Debug.WriteLine("Cascade classifier loaded successfully");
+            }
+            catch (FileNotFoundException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to load face detector: {ex.Message}", ex);
+                throw new Exception($"Failed to load face detector: {ex.Message}\n\n" +
+                    "This may indicate:\n" +
+                    "1. Missing or corrupted haarcascade_frontalface_default.xml\n" +
+                    "2. Missing EmguCV runtime libraries\n" +
+                    "3. Corrupted OpenCV installation", ex);
             }
 
             try
@@ -111,6 +129,36 @@ namespace AttendanceFaceRocog
             CvInvoke.GaussianBlur(resized, resized, new Size(3, 3), 0);
 
             return resized;
+        }
+
+        /// <summary>
+        /// Calculate the distance from camera to face in inches using focal length method
+        /// Distance = (Actual Face Width in pixels * Focal Length) / Detected Face Width
+        /// </summary>
+        private double CalculateFaceDistanceInches(Rectangle face)
+        {
+            if (face.Width <= 0)
+                return double.MaxValue;
+
+            // Using the formula: Distance (inches) = (AVERAGE_FACE_WIDTH_INCHES * CAMERA_FOCAL_LENGTH) / face.Width
+            double distance = (AVERAGE_FACE_WIDTH_INCHES * CAMERA_FOCAL_LENGTH) / face.Width;
+            return distance;
+        }
+
+        /// <summary>
+        /// Check if the detected face is within the optimal 15-inch distance for recognition
+        /// </summary>
+        private bool IsFaceAtOptimalDistance(Rectangle face)
+        {
+            double distance = CalculateFaceDistanceInches(face);
+            _detectedFaceDistance = distance;
+
+            // Allow recognition if face is at 15 inches ± 5 inches (10-20 inches range)
+            double tolerance = 5.0;
+            double minDistance = FACE_RECOGNITION_DISTANCE_INCHES - tolerance;
+            double maxDistance = FACE_RECOGNITION_DISTANCE_INCHES + tolerance;
+
+            return distance >= minDistance && distance <= maxDistance;
         }
 
         private bool IsFaceCloseEnough(Rectangle face, int frameWidth, int frameHeight)
@@ -225,20 +273,69 @@ namespace AttendanceFaceRocog
 
         public Rectangle[] DetectFaces(Mat frame)
         {
+            if (frame == null || frame.IsEmpty)
+            {
+                System.Diagnostics.Debug.WriteLine("Frame is null or empty");
+                return Array.Empty<Rectangle>();
+            }
+
+            if (_faceDetector == null)
+            {
+                System.Diagnostics.Debug.WriteLine("Face detector is not initialized");
+                return Array.Empty<Rectangle>();
+            }
+
             Mat grayFrame = new Mat();
-            CvInvoke.CvtColor(frame, grayFrame, ColorConversion.Bgr2Gray);
-            CvInvoke.EqualizeHist(grayFrame, grayFrame);
+            try
+            {
+                CvInvoke.CvtColor(frame, grayFrame, ColorConversion.Bgr2Gray);
+                
+                if (grayFrame.IsEmpty)
+                {
+                    System.Diagnostics.Debug.WriteLine("Gray frame is empty after conversion");
+                    return Array.Empty<Rectangle>();
+                }
 
-            var faces = _faceDetector.DetectMultiScale(
-                grayFrame,
-                scaleFactor: 1.05,      // More sensitive (was 1.08)
-                minNeighbors: 3,         // Reduced from 4
-                minSize: new Size(MIN_FACE_SIZE_FOR_DETECTION, MIN_FACE_SIZE_FOR_DETECTION),
-                maxSize: new Size(MAX_FACE_SIZE, MAX_FACE_SIZE)
-            );
+                CvInvoke.EqualizeHist(grayFrame, grayFrame);
 
-            grayFrame.Dispose();
-            return faces;
+                // Ensure size parameters are valid
+                int minSize = Math.Max(MIN_FACE_SIZE_FOR_DETECTION, 20);  // Minimum safe size
+                int maxSize = Math.Min(MAX_FACE_SIZE, Math.Max(frame.Width, frame.Height));
+
+                if (minSize >= maxSize)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Invalid size parameters: minSize={minSize}, maxSize={maxSize}");
+                    return Array.Empty<Rectangle>();
+                }
+
+                try
+                {
+                    var faces = _faceDetector.DetectMultiScale(
+                        grayFrame,
+                        scaleFactor: 1.08,
+                        minNeighbors: 4,
+                        minSize: new Size(minSize, minSize),
+                        maxSize: new Size(maxSize, maxSize)
+                    );
+
+                    System.Diagnostics.Debug.WriteLine($"Detected {faces.Length} faces");
+                    return faces ?? Array.Empty<Rectangle>();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error in DetectMultiScale: {ex.Message}");
+                    return Array.Empty<Rectangle>();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error detecting faces: {ex.Message}");
+                return Array.Empty<Rectangle>();
+            }
+            finally
+            {
+                grayFrame?.Dispose();
+            }
         }
 
         public Rectangle[] DetectCloseFaces(Mat frame)
@@ -251,6 +348,49 @@ namespace AttendanceFaceRocog
                 .ToArray();
 
             return closeFaces;
+        }
+
+        /// <summary>
+        /// Detect faces at the optimal 15-inch recognition distance
+        /// </summary>
+        public Rectangle[] DetectFacesAtOptimalDistance(Mat frame)
+        {
+            Rectangle[] allFaces = DetectFaces(frame);
+
+            var optimalDistanceFaces = allFaces
+                .Where(f => IsFaceAtOptimalDistance(f))
+                .OrderByDescending(f => f.Width * f.Height)
+                .ToArray();
+
+            return optimalDistanceFaces;
+        }
+
+        /// <summary>
+        /// Capture a full-frame photo (not just face) for profile picture
+        /// </summary>
+        public string? CaptureFullPhoto(Mat frame, int empId)
+        {
+            if (frame == null || frame.IsEmpty)
+                return null;
+
+            try
+            {
+                string fileName = $"emp_{empId}_profile_{DateTime.Now:yyyyMMddHHmmss}.jpg";
+                string filePath = Path.Combine(_facesFolder, fileName);
+                
+                // Save the full frame as a bitmap
+                Bitmap bmp = frame.ToBitmap();
+                bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Jpeg);
+                bmp.Dispose();
+                
+                System.Diagnostics.Debug.WriteLine($"Full photo captured: {filePath}");
+                return filePath;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error capturing full photo: {ex.Message}");
+                return null;
+            }
         }
 
         /// <summary>
@@ -377,9 +517,9 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Recognize a face in a frame
+        /// Recognize a face in a frame - only when at optimal 15-inch distance
         /// </summary>
-        public (int empId, double confidence, bool isStable)? RecognizeFace(Mat frame)
+        public (int empId, double confidence, bool isStable, double distanceInches)? RecognizeFace(Mat frame)
         {
             if (!_isModelTrained || _recognizer == null)
             {
@@ -387,12 +527,15 @@ namespace AttendanceFaceRocog
                 return null;
             }
 
-            Rectangle[] closeFaces = DetectCloseFaces(frame);
+            Rectangle[] optimalFaces = DetectFacesAtOptimalDistance(frame);
 
-            if (closeFaces.Length == 0)
+            if (optimalFaces.Length == 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"No faces detected at optimal 15-inch distance. Current detected distance: {_detectedFaceDistance:F2} inches");
                 return null;
+            }
 
-            Rectangle face = closeFaces[0];
+            Rectangle face = optimalFaces[0];
 
             try
             {
@@ -433,7 +576,7 @@ namespace AttendanceFaceRocog
                                        _recognitionHistory.All(id => id == empId);
 
                         double confidence = Math.Max(0, 100 - result.Distance);
-                        return (empId, confidence, isStable);
+                        return (empId, confidence, isStable, _detectedFaceDistance);
                     }
                 }
 
@@ -450,6 +593,11 @@ namespace AttendanceFaceRocog
         public void ClearRecognitionHistory()
         {
             _recognitionHistory.Clear();
+        }
+
+        public double GetDetectedFaceDistance()
+        {
+            return _detectedFaceDistance;
         }
 
         public bool IsModelTrained => _isModelTrained;

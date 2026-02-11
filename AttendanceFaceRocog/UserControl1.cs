@@ -704,7 +704,7 @@ namespace AttendanceFaceRocog
 
                 if (result.HasValue)
                 {
-                    var (empId, confidence, isStable) = result.Value;
+                    var (empId, confidence, isStable, distanceInches) = result.Value;
                     var emp = DatabaseHelper.GetEmployeeById(empId);
 
                     if (emp.HasValue)
@@ -981,7 +981,19 @@ namespace AttendanceFaceRocog
 
             try
             {
-                string? imagePath = DatabaseHelper.GetEmployeeFaceImage(empId);
+                // Try to get full profile photo first, then fall back to face image
+                string? profilePhotoPath = DatabaseHelper.GetProfilePhoto(empId);
+                string? imagePath = null;
+
+                if (!string.IsNullOrEmpty(profilePhotoPath) && File.Exists(profilePhotoPath))
+                {
+                    imagePath = profilePhotoPath;
+                }
+                else
+                {
+                    // Fall back to face image if profile photo not available
+                    imagePath = DatabaseHelper.GetEmployeeFaceImage(empId);
+                }
 
                 LblFullName.Text = fullName;
                 LblEmployeeID.Text = $"EMP-{empId:D3}";

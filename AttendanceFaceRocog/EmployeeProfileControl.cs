@@ -25,6 +25,8 @@ namespace AttendanceFaceRocog
         private bool _isRecognitionStable = false;
         private Label? lblRecognitionStatus;
 
+        private string? _capturedFullPhotoPath = null;  // Store full photo path temporarily
+
         public EmployeeProfileControl()
         {
             InitializeComponent();
@@ -133,36 +135,109 @@ namespace AttendanceFaceRocog
         {
             PanelProfileList.Controls.Clear();
 
-            if (employees.Rows.Count == 0)
+            if (employees == null || employees.Rows.Count == 0)
             {
-                ShowNoProfilesMessage();
+                Label lblNoProfiles = new Label
+                {
+                    Text = "No employees added yet",
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    ForeColor = Color.Gray,
+                    Font = new Font("Arial", 11)
+                };
+                PanelProfileList.Controls.Add(lblNoProfiles);
                 return;
             }
 
-            // Create a scrollable flow layout panel
-            var flowPanel = new FlowLayoutPanel
-            {
-                Location = new Point(10, 10),
-                Size = new Size(PanelProfileList.Width - 20, PanelProfileList.Height - 20),
-                AutoScroll = true,
-                FlowDirection = FlowDirection.TopDown,
-                WrapContents = false,
-                BackColor = Color.White
-            };
-
-            // Add profile cards - ONE per employee
             foreach (DataRow row in employees.Rows)
             {
-                int empId = Convert.ToInt32(row["empID"]);
-                string empCode = row["empCode"]?.ToString() ?? "";
-                string fullName = row["FullName"]?.ToString() ?? "";
-                string imagePath = row["imgPath"] != DBNull.Value ? row["imgPath"].ToString() ?? "" : "";
+                int empId = (int)row["empID"];
+                string fullName = row["FullName"].ToString() ?? "";
+                string empCode = row["empCode"]?.ToString() ?? $"EMP-{empId:D3}";
+                string imgPath = row["imgPath"]?.ToString() ?? "";
 
-                var profileCard = CreateProfileCard(empId, empCode, empId, fullName, imagePath);
-                flowPanel.Controls.Add(profileCard);
+                // Get profile photo path - prioritize full photo over face image
+                string? profilePhotoPath = DatabaseHelper.GetProfilePhoto(empId);
+                string photoToDisplay = (!string.IsNullOrEmpty(profilePhotoPath) && File.Exists(profilePhotoPath))
+                    ? profilePhotoPath
+                    : imgPath;
+
+                // Create a panel for each employee card
+                Panel empPanel = new Panel
+                {
+                    Width = 250,
+                    Height = 300,
+                    Margin = new Padding(10),
+                    BorderStyle = BorderStyle.FixedSingle,
+                    BackColor = Color.White
+                };
+
+                // Display profile photo if available, otherwise face image
+                PictureBox picProfile = new PictureBox
+                {
+                    Width = 250,
+                    Height = 200,
+                    SizeMode = PictureBoxSizeMode.Zoom,
+                    BackColor = Color.LightGray
+                };
+
+                try
+                {
+                    if (!string.IsNullOrEmpty(photoToDisplay) && File.Exists(photoToDisplay))
+                    {
+                        var img = new Bitmap(photoToDisplay);
+                        picProfile.Image = img;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error loading profile photo: {ex.Message}");
+                }
+
+                picProfile.Dock = DockStyle.Top;
+                empPanel.Controls.Add(picProfile);
+
+                // Name label
+                Label lblName = new Label
+                {
+                    Text = fullName,
+                    Dock = DockStyle.Top,
+                    Height = 35,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Font = new Font("Arial", 11, FontStyle.Bold),
+                    ForeColor = Color.Black
+                };
+                empPanel.Controls.Add(lblName);
+
+                // Employee code label
+                Label lblCode = new Label
+                {
+                    Text = $"Code: {empCode}",
+                    Dock = DockStyle.Top,
+                    Height = 25,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Font = new Font("Arial", 9),
+                    ForeColor = Color.DarkGray
+                };
+                empPanel.Controls.Add(lblCode);
+
+                // View button
+                Button btnView = new Button
+                {
+                    Text = "View Details",
+                    Dock = DockStyle.Bottom,
+                    Height = 35,
+                    BackColor = Color.FromArgb(34, 197, 94),
+                    ForeColor = Color.White,
+                    Font = new Font("Arial", 10, FontStyle.Bold),
+                    FlatStyle = FlatStyle.Flat
+                };
+
+                btnView.Click += (s, e) => ShowEmployeeDetails(empId, empCode, fullName, photoToDisplay);
+                empPanel.Controls.Add(btnView);
+
+                PanelProfileList.Controls.Add(empPanel);
             }
-
-            PanelProfileList.Controls.Add(flowPanel);
         }
 
         /// <summary>
@@ -314,9 +389,19 @@ namespace AttendanceFaceRocog
                     // Dispose old image
                     profilePic.Image?.Dispose();
                     
-                    if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+                    // Try to get full profile photo first
+                    string? profilePhotoPath = DatabaseHelper.GetProfilePhoto(empId);
+                    string photoToDisplay = profilePhotoPath ?? imagePath ?? "";
+
+                    // If no full profile photo, use face image
+                    if (string.IsNullOrEmpty(photoToDisplay) || !File.Exists(photoToDisplay))
                     {
-                        using (var img = Image.FromFile(imagePath))
+                        photoToDisplay = imagePath ?? "";
+                    }
+
+                    if (!string.IsNullOrEmpty(photoToDisplay) && File.Exists(photoToDisplay))
+                    {
+                        using (var img = Image.FromFile(photoToDisplay))
                         {
                             profilePic.Image = new Bitmap(img);
                         }
@@ -723,7 +808,7 @@ private void ProcessFaceRecognition(Mat frame)
 
         if (result.HasValue)
         {
-            var (empId, confidence, isStable) = result.Value;
+            var (empId, confidence, isStable, distanceInches) = result.Value;
             var emp = DatabaseHelper.GetEmployeeById(empId);
 
             if (emp.HasValue)
@@ -914,7 +999,7 @@ private void UpdateRecognitionStatus(string text, Color color)
                 
                 if (recognitionResult.HasValue)
                 {
-                    var (existingEmpId, confidence, isStable) = recognitionResult.Value;
+                    var (existingEmpId, confidence, isStable, distanceInches) = recognitionResult.Value;
                     
                     if (confidence > 70)
                     {
@@ -980,6 +1065,15 @@ private void UpdateRecognitionStatus(string text, Color color)
                     DatabaseHelper.AddFaceImage(empId, path);
                 }
 
+                // Capture and save full profile photo
+                BtnAdd.Text = "Saving Photo...";
+                _capturedFullPhotoPath = _faceService.CaptureFullPhoto(_lastFrame, empId);
+                
+                if (!string.IsNullOrEmpty(_capturedFullPhotoPath))
+                {
+                    DatabaseHelper.AddProfilePhoto(empId, _capturedFullPhotoPath);
+                }
+
                 // Retrain the model with the new faces
                 BtnAdd.Text = "Training...";
                 await Task.Run(() => _faceService.TrainModel());
@@ -990,6 +1084,7 @@ private void UpdateRecognitionStatus(string text, Color color)
                     $"👤 Name: {TxtEnterName.Text}\n" +
                     $"🆔 Code: EMP-{empId:D3}\n" +
                     $"📸 {faceImagePaths.Count} face images captured & trained\n" +
+                    $"📷 Profile photo saved\n" +
                     $"━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
                     $"The new employee can now use face recognition\n" +
                     $"for attendance tracking.",
@@ -998,6 +1093,7 @@ private void UpdateRecognitionStatus(string text, Color color)
                     MessageBoxIcon.Information);
 
                 TxtEnterName.Clear();
+                _capturedFullPhotoPath = null;
                 StopCamera();
                 BtnAdd.Enabled = true;
                 BtnAdd.Text = "ADD";

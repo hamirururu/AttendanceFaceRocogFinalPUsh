@@ -59,19 +59,21 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            // Use ROW_NUMBER() to get only the first/latest image per employee
+            // Use ROW_NUMBER() to get only the latest image per employee
             string query = @"
                 WITH RankedImages AS (
                     SELECT 
                         e.empID, 
                         e.empCode, 
                         e.FullName, 
+                        e.profilePhotoPath,
                         f.imgPath,
                         ROW_NUMBER() OVER (PARTITION BY e.empID ORDER BY f.faceImageID DESC) AS rn
                     FROM dbo.Employees e
                     LEFT JOIN dbo.FaceImages f ON e.empID = f.empID
                 )
-                SELECT empID, empCode, FullName, imgPath
+                SELECT empID, empCode, FullName, 
+                       COALESCE(profilePhotoPath, imgPath) AS imgPath
                 FROM RankedImages
                 WHERE rn = 1
                 ORDER BY FullName";
@@ -94,7 +96,8 @@ namespace AttendanceFaceRocog
 
             string query = @"SELECT e.empID, e.empCode, e.FullName, f.imgPath 
                            FROM dbo.Employees e
-                           INNER JOIN dbo.FaceImages f ON e.empID = f.empID";
+                           INNER JOIN dbo.FaceImages f ON e.empID = f.empID
+                           ORDER BY e.FullName";
 
             using var cmd = new SqlCommand(query, conn);
             using var adapter = new SqlDataAdapter(cmd);
@@ -169,17 +172,17 @@ namespace AttendanceFaceRocog
 
                 // Update only empty fields
                 string updateQuery = @"UPDATE dbo.Attendance SET 
-                                      TimeIn = CASE WHEN @TimeIn != '' AND TimeIn = '' THEN @TimeIn ELSE TimeIn END,
-                                      TimeOut = CASE WHEN @TimeOut != '' AND TimeOut = '' THEN @TimeOut ELSE TimeOut END,
-                                      StartBreak = CASE WHEN @StartBreak != '' AND StartBreak = '' THEN @StartBreak ELSE StartBreak END,
-                                      StopBreak = CASE WHEN @StopBreak != '' AND StopBreak = '' THEN @StopBreak ELSE StopBreak END
+                                      TimeIn = CASE WHEN @TimeIn != '' AND TimeIn IS NULL THEN @TimeIn ELSE TimeIn END,
+                                      TimeOut = CASE WHEN @TimeOut != '' AND TimeOut IS NULL THEN @TimeOut ELSE TimeOut END,
+                                      StartBreak = CASE WHEN @StartBreak != '' AND StartBreak IS NULL THEN @StartBreak ELSE StartBreak END,
+                                      StopBreak = CASE WHEN @StopBreak != '' AND StopBreak IS NULL THEN @StopBreak ELSE StopBreak END
                                       WHERE attendanceID = @attendanceID";
 
                 using var updateCmd = new SqlCommand(updateQuery, conn);
-                updateCmd.Parameters.AddWithValue("@TimeIn", timeIn);
-                updateCmd.Parameters.AddWithValue("@TimeOut", timeOut);
-                updateCmd.Parameters.AddWithValue("@StartBreak", startBr);
-                updateCmd.Parameters.AddWithValue("@StopBreak", stopBr);
+                updateCmd.Parameters.AddWithValue("@TimeIn", timeIn ?? "");
+                updateCmd.Parameters.AddWithValue("@TimeOut", timeOut ?? "");
+                updateCmd.Parameters.AddWithValue("@StartBreak", startBr ?? "");
+                updateCmd.Parameters.AddWithValue("@StopBreak", stopBr ?? "");
                 updateCmd.Parameters.AddWithValue("@attendanceID", attendanceId);
 
                 updateCmd.ExecuteNonQuery();
@@ -194,10 +197,10 @@ namespace AttendanceFaceRocog
 
                 using var insertCmd = new SqlCommand(insertQuery, conn);
                 insertCmd.Parameters.AddWithValue("@empID", empId);
-                insertCmd.Parameters.AddWithValue("@TimeIn", timeIn);
-                insertCmd.Parameters.AddWithValue("@TimeOut", timeOut);
-                insertCmd.Parameters.AddWithValue("@StartBreak", startBr);
-                insertCmd.Parameters.AddWithValue("@StopBreak", stopBr);
+                insertCmd.Parameters.AddWithValue("@TimeIn", timeIn ?? "");
+                insertCmd.Parameters.AddWithValue("@TimeOut", timeOut ?? "");
+                insertCmd.Parameters.AddWithValue("@StartBreak", startBr ?? "");
+                insertCmd.Parameters.AddWithValue("@StopBreak", stopBr ?? "");
 
                 insertCmd.ExecuteNonQuery();
             }
@@ -205,6 +208,9 @@ namespace AttendanceFaceRocog
             return (true, "Attendance recorded successfully.");
         }
 
+        /// <summary>
+        /// Get the most recent face image for an employee
+        /// </summary>
         public static string? GetEmployeeFaceImage(int empId)
         {
             try
@@ -216,13 +222,13 @@ namespace AttendanceFaceRocog
                     string query = @"SELECT TOP 1 imgPath 
                            FROM dbo.FaceImages 
                            WHERE empID = @empID 
-                           ORDER BY createdDate DESC";
+                           ORDER BY faceImageID DESC";
 
                     using (SqlCommand cmd = new SqlCommand(query, con))
                     {
                         cmd.Parameters.AddWithValue("@empID", empId);
 
-                        object result = cmd.ExecuteScalar();
+                        object? result = cmd.ExecuteScalar();
 
                         if (result != null && result != DBNull.Value)
                         {
@@ -240,7 +246,7 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Get attendance history for an employee (last 7 days)
+        /// Get attendance history for an employee (last 7 days by default)
         /// </summary>
         public static DataTable GetEmployeeAttendanceHistory(int empId, int days = 7)
         {
@@ -381,26 +387,69 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Delete employee and all related data
+        /// Delete employee and all related data (cascade handled by FK constraint)
         /// </summary>
         public static void DeleteEmployee(int empId)
         {
             using var conn = GetConnection();
             conn.Open();
             
-            // Delete face images first (foreign key constraint)
-            using (var cmd = new SqlCommand("DELETE FROM FaceImages WHERE empID = @empId", conn))
+            // Delete attendance records
+            using (var cmd = new SqlCommand("DELETE FROM dbo.Attendance WHERE empID = @empId", conn))
+            {
+                cmd.Parameters.AddWithValue("@empId", empId);
+                cmd.ExecuteNonQuery();
+            }
+
+            // Delete face images (FK constraint will handle cascade)
+            using (var cmd = new SqlCommand("DELETE FROM dbo.FaceImages WHERE empID = @empId", conn))
             {
                 cmd.Parameters.AddWithValue("@empId", empId);
                 cmd.ExecuteNonQuery();
             }
             
             // Delete employee
-            using (var cmd = new SqlCommand("DELETE FROM Employees WHERE empID = @empId", conn))
+            using (var cmd = new SqlCommand("DELETE FROM dbo.Employees WHERE empID = @empId", conn))
             {
                 cmd.Parameters.AddWithValue("@empId", empId);
                 cmd.ExecuteNonQuery();
             }
+        }
+
+        /// <summary>
+        /// Add/Update a full profile photo for an employee
+        /// </summary>
+        public static void AddProfilePhoto(int empId, string photoPath)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"UPDATE dbo.Employees 
+                           SET profilePhotoPath = @profilePhotoPath 
+                           WHERE empID = @empID";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@empID", empId);
+            cmd.Parameters.AddWithValue("@profilePhotoPath", photoPath);
+
+            cmd.ExecuteNonQuery();
+        }
+
+        /// <summary>
+        /// Get profile photo path for an employee
+        /// </summary>
+        public static string? GetProfilePhoto(int empId)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            string query = @"SELECT profilePhotoPath FROM dbo.Employees WHERE empID = @empID";
+
+            using var cmd = new SqlCommand(query, conn);
+            cmd.Parameters.AddWithValue("@empID", empId);
+
+            var result = cmd.ExecuteScalar();
+            return result != null && result != DBNull.Value ? result.ToString() : null;
         }
     }
 }
