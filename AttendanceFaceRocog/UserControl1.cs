@@ -30,9 +30,9 @@ namespace AttendanceFaceRocog
         private bool _isRecognitionStable = false;
         private bool _hasLoggedAttendance = false;
 
-        // Timer to auto-clear profile status
+        // Timer to auto-clear profile status - CHANGED TO 2 SECONDS
         private System.Windows.Forms.Timer? _autoClearTimer;
-        private const int AUTO_CLEAR_DELAY_MS = 5000;
+        private const int AUTO_CLEAR_DELAY_MS = 2000;  // Changed from 5000 to 2000 (2 seconds)
 
         // Auto-scanning flag
         private bool _isAutoScanEnabled = true;
@@ -69,8 +69,6 @@ namespace AttendanceFaceRocog
             
             // Initialize face service in constructor to avoid null reference
             InitializeFaceService();
-            
-            this.Resize += UserControl1_Resize;
 
             // Auto-start camera when control loads
             this.Load += UserControl1_Load;
@@ -546,7 +544,7 @@ namespace AttendanceFaceRocog
             picCamera = new PictureBox
             {
                 Dock = DockStyle.Fill,
-                SizeMode = PictureBoxSizeMode.StretchImage,
+                SizeMode = PictureBoxSizeMode.Zoom,
                 BackColor = Color.Black
             };
             pnlScannerContainer.Controls.Add(picCamera);
@@ -570,11 +568,6 @@ namespace AttendanceFaceRocog
         {
             if (_isCameraRunning) return;
 
-            _hasLoggedAttendance = false;
-            _isProcessingAttendance = false;
-            _autoClearTimer?.Stop();
-            PanelProfileStatus.Visible = false;
-
             bool cameraOpened = false;
 
             for (int i = 0; i < 5; i++)
@@ -582,8 +575,13 @@ namespace AttendanceFaceRocog
                 try
                 {
                     _capture = new VideoCapture(i, VideoCapture.API.DShow);
+
                     if (_capture.IsOpened)
                     {
+                        _capture.Set(CapProp.FrameWidth, 640);
+                        _capture.Set(CapProp.FrameHeight, 480);
+                        // DO NOT set FPS yet
+
                         cameraOpened = true;
                         break;
                     }
@@ -600,8 +598,7 @@ namespace AttendanceFaceRocog
 
             if (!cameraOpened || _capture == null)
             {
-                MessageBox.Show("No camera could be opened. Please check if your camera is connected.",
-                    "Camera Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("No camera could be opened.");
                 return;
             }
 
@@ -649,42 +646,61 @@ namespace AttendanceFaceRocog
             if (picCamera == null || picCamera.IsDisposed || _capture == null) return;
 
             Mat frame = new Mat();
+
             try
             {
                 _capture.Retrieve(frame);
 
-                if (frame == null || frame.IsEmpty) return;
-
+                // ✅ ADD THIS LINE - MIRROR THE CAMERA (HORIZONTAL FLIP)
                 CvInvoke.Flip(frame, frame, FlipType.Horizontal);
 
-                // Process face detection
-                ProcessFaceDetection(frame);
+                ProcessFaceDetection(frame); // recognition uses mirrored frame
 
-                Bitmap bmp = frame.ToBitmap();
+                Mat display = frame.Clone();
 
-                if (picCamera.InvokeRequired)
+                Rectangle crop = GetCenterCrop(display.Size, picCamera.Size);
+
+                using (Mat cropped = new Mat(display, crop))
                 {
-                    picCamera.Invoke(new Action(() =>
+                    CvInvoke.Resize(cropped, cropped, picCamera.Size);
+
+                    Bitmap bmp = cropped.ToBitmap();
+
+                    picCamera.Invoke(() =>
                     {
-                        var old = picCamera.Image;
+                        picCamera.Image?.Dispose();
                         picCamera.Image = bmp;
-                        old?.Dispose();
-                    }));
+                    });
                 }
-                else
-                {
-                    var old = picCamera.Image;
-                    picCamera.Image = bmp;
-                    old?.Dispose();
-                }
+
+                display.Dispose();
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"ProcessFrame error: {ex.Message}");
+                MessageBox.Show(ex.ToString());
             }
             finally
             {
-                frame?.Dispose();
+                frame.Dispose();
+            }
+        }
+
+        private Rectangle GetCenterCrop(Size src, Size dst)
+        {
+            float srcRatio = (float)src.Width / src.Height;
+            float dstRatio = (float)dst.Width / dst.Height;
+
+            if (srcRatio > dstRatio)
+            {
+                int newWidth = (int)(src.Height * dstRatio);
+                int x = (src.Width - newWidth) / 2;
+                return new Rectangle(x, 0, newWidth, src.Height);
+            }
+            else
+            {
+                int newHeight = (int)(src.Width / dstRatio);
+                int y = (src.Height - newHeight) / 2;
+                return new Rectangle(0, y, src.Width, newHeight);
             }
         }
 
@@ -881,22 +897,20 @@ namespace AttendanceFaceRocog
                         DisplayAttendanceConfirmation(empDetails.Value.empId, empDetails.Value.fullName, currentTime);
                     }
 
-                    MessageBox.Show($"{FormatActionName(action)} recorded successfully for {_recognizedEmpName}!",
-                        "Attendance Recorded", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
                     StartAutoClearTimer();
                 }
                 else
                 {
-                    MessageBox.Show($"{message}\n\nEmployee: {_recognizedEmpName}",
-                        "Already Recorded", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    // REMOVED: MessageBox.Show() - No message box for already recorded
+                    // Just update status and restart camera
+                    UpdateStatus($"⚠️ {message}", Color.Orange);
 
                     _isProcessingAttendance = false;
 
-                    // Restart camera for next attempt
+                    // Restart camera for next attempt after 2 seconds
                     if (_isAutoScanEnabled)
                     {
-                        Task.Delay(2000).ContinueWith(_ =>
+                        _ = Task.Delay(2000).ContinueWith(_ =>
                         {
                             if (!_isCameraRunning)
                             {
@@ -908,8 +922,10 @@ namespace AttendanceFaceRocog
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error logging attendance: {ex.Message}",
-                    "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                // REMOVED: MessageBox.Show() for error message
+                // Just log and update status
+                System.Diagnostics.Debug.WriteLine($"Error logging attendance: {ex.Message}");
+                UpdateStatus("❌ Error recording attendance", Color.Red);
                 _isProcessingAttendance = false;
             }
         }
@@ -967,6 +983,73 @@ namespace AttendanceFaceRocog
             }
         }
 
+        private void LogAttendanceForRecognizedEmployee(string action)
+        {
+            if (_recognizedEmpId == null || _isProcessingAttendance)
+                return;
+
+            _isProcessingAttendance = true;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    string currentTime = DateTime.Now.ToString("HH:mm:ss");
+
+                    (bool success, string message) result = action switch
+                    {
+                        "TimeIn" => LogTimeIn(_recognizedEmpId.Value, currentTime),
+                        "TimeOut" => LogTimeOut(_recognizedEmpId.Value, currentTime),
+                        "StartBreak" => LogStartBreak(_recognizedEmpId.Value, currentTime),
+                        "StopBreak" => LogStopBreak(_recognizedEmpId.Value, currentTime),
+                        _ => (false, "Invalid action")
+                    };
+
+                    (bool success, string message) = result;
+
+                    if (success)
+                    {
+                        var empDetails = DatabaseHelper.GetEmployeeById(_recognizedEmpId.Value);
+                        if (empDetails.HasValue)
+                        {
+                            DisplayAttendanceConfirmation(empDetails.Value.empId, empDetails.Value.fullName, currentTime);
+                        }
+
+                        // REMOVED: MessageBox.Show() - No message box displayed
+                        // Camera will reload after 2 seconds automatically
+                        StartAutoClearTimer();
+                    }
+                    else
+                    {
+                        // REMOVED: MessageBox.Show() for duplicate message
+                        // Just update status and restart camera
+                        UpdateStatus($"⚠️ {message}", Color.Orange);
+
+                        _isProcessingAttendance = false;
+
+                        // Restart camera for next attempt after 2 seconds
+                        if (_isAutoScanEnabled)
+                        {
+                            _ = Task.Delay(2000).ContinueWith(_ =>
+                            {
+                                if (!_isCameraRunning)
+                                {
+                                    this.Invoke(new Action(AutoStartCamera));
+                                }
+                            });
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // REMOVED: MessageBox.Show() for error
+                    System.Diagnostics.Debug.WriteLine($"Error logging attendance: {ex.Message}");
+                    UpdateStatus("❌ Error recording attendance", Color.Red);
+                    _isProcessingAttendance = false;
+                }
+            });
+        }
+
         #endregion
 
         #region UI Display Methods
@@ -981,32 +1064,23 @@ namespace AttendanceFaceRocog
 
             try
             {
-                // Try to get full profile photo first, then fall back to face image
+                // ✅ CHANGED: Get colored profile photo (not grayscale training image)
                 string? profilePhotoPath = DatabaseHelper.GetProfilePhoto(empId);
-                string? imagePath = null;
-
-                if (!string.IsNullOrEmpty(profilePhotoPath) && File.Exists(profilePhotoPath))
-                {
-                    imagePath = profilePhotoPath;
-                }
-                else
-                {
-                    // Fall back to face image if profile photo not available
-                    imagePath = DatabaseHelper.GetEmployeeFaceImage(empId);
-                }
 
                 LblFullName.Text = fullName;
                 LblEmployeeID.Text = $"EMP-{empId:D3}";
 
-                if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+                // ✅ Display COLORED profile photo
+                if (!string.IsNullOrEmpty(profilePhotoPath) && File.Exists(profilePhotoPath))
                 {
-                    using (var img = Image.FromFile(imagePath))
+                    using (var img = Image.FromFile(profilePhotoPath))
                     {
                         ProfilePic.Image = new Bitmap(img);
                     }
                 }
                 else
                 {
+                    // Fallback to default avatar if no profile photo
                     ProfilePic.Image = CreateDefaultAvatar();
                 }
 
@@ -1217,54 +1291,40 @@ namespace AttendanceFaceRocog
             return panel;
         }
 
-        #endregion
-
-        #region Layout
-
-        private void UserControl1_Resize(object? sender, EventArgs e)
-        {
-            CenterControls();
-        }
-
-        protected override void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
-            CenterControls();
-        }
-
         private void CenterControls()
         {
             int panelWidth = guna2Panel2.ClientSize.Width;
             int panelHeight = guna2Panel2.ClientSize.Height;
 
-            int scannerWidth = 415;
-            int scannerHeight = 293;
+            // Desired aspect ratio (559x466)
+            float ratio = 559f / 466f;
 
-            if (panelWidth > 700)
+            int width = panelWidth - 40;
+            int height = (int)(width / ratio);
+
+            // If too tall, fit by height instead
+            if (height > panelHeight - 120)
             {
-                scannerWidth = Math.Min(550, (int)(panelWidth * 0.68));
-                scannerHeight = (int)(scannerWidth * 0.707);
+                height = panelHeight - 120;
+                width = (int)(height * ratio);
             }
 
-            int maxScannerHeight = panelHeight - 280;
-            if (scannerHeight > maxScannerHeight && maxScannerHeight > 200)
-            {
-                scannerHeight = maxScannerHeight;
-                scannerWidth = (int)(scannerHeight / 0.707);
-            }
+            pnlScannerContainer.Size = new Size(width, height);
 
-            pnlScannerContainer.Size = new Size(scannerWidth, scannerHeight);
-            pnlScannerContainer.Left = (panelWidth - scannerWidth) / 2;
+            // ✅ auto keep center
+            pnlScannerContainer.Left = (panelWidth - width) / 2;
             pnlScannerContainer.Top = 20;
+        }
 
-            int buttonWidth = 150;
-            int buttonSpacing = 20;
-            int totalButtonWidth = (buttonWidth * 2) + buttonSpacing;
-            int buttonStartX = (panelWidth - totalButtonWidth) / 2;
 
-            pnlStatusBadge.Size = new Size(180, 32);
-            pnlStatusBadge.Left = (panelWidth - 180) / 2;
-            pnlStatusBadge.Top = pnlScannerContainer.Bottom + 6;
+        #endregion
+
+        #region Layout
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
         }
 
         #endregion

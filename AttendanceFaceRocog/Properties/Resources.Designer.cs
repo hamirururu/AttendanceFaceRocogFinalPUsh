@@ -223,6 +223,16 @@ namespace AttendanceFaceRocog.Properties {
         /// <summary>
         ///   Looks up a localized resource of type System.Drawing.Bitmap.
         /// </summary>
+        internal static System.Drawing.Bitmap mdi__card_account_details {
+            get {
+                object obj = ResourceManager.GetObject("mdi--card-account-details", resourceCulture);
+                return ((System.Drawing.Bitmap)(obj));
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized resource of type System.Drawing.Bitmap.
+        /// </summary>
         internal static System.Drawing.Bitmap persony_white {
             get {
                 object obj = ResourceManager.GetObject("persony_white", resourceCulture);

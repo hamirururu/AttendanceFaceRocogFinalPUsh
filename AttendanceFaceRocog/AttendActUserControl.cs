@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Drawing;
+using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 
@@ -10,6 +11,8 @@ namespace AttendanceFaceRocog
 {
     public partial class AttendActUserControl : UserControl
     {
+        private DataTable? _allAttendanceData;  // Cache all attendance data for filtering
+
         public AttendActUserControl()
         {
             InitializeComponent();
@@ -22,6 +25,82 @@ namespace AttendanceFaceRocog
         {
             LoadAttendanceStatistics();
             LoadActivityTimeline();
+            SetupSearchBar();
+        }
+
+        /// <summary>
+        /// Setup search bar event handler
+        /// </summary>
+        private void SetupSearchBar()
+        {
+            // Check if TxtSearchBar exists, if not you can add it programmatically or via designer
+            var searchBar = this.Controls.Find("TxtSearchBar", true).FirstOrDefault() as TextBox;
+            if (searchBar != null)
+            {
+                searchBar.TextChanged += TxtSearchBar_TextChanged;
+            }
+        }
+
+        /// <summary>
+        /// Smart search event - triggered on text change
+        /// </summary>
+        private void TxtSearchBar_TextChanged(object? sender, EventArgs e)
+        {
+            if (sender is not TextBox searchBox) return;
+
+            string searchText = searchBox.Text.Trim().ToLower();
+
+            if (string.IsNullOrEmpty(searchText))
+            {
+                // If search is empty, show all records
+                if (_allAttendanceData != null)
+                {
+                    DisplayAttendanceRecords(_allAttendanceData);
+                }
+            }
+            else
+            {
+                // Perform smart search
+                PerformSmartSearch(searchText);
+            }
+        }
+
+        /// <summary>
+        /// Smart search - searches by employee name and employee ID
+        /// </summary>
+        private void PerformSmartSearch(string searchText)
+        {
+            if (_allAttendanceData == null || _allAttendanceData.Rows.Count == 0)
+            {
+                ShowNoSearchResultsMessage();
+                return;
+            }
+
+            // Filter data by name or employee code
+            var filteredRows = _allAttendanceData.AsEnumerable()
+                .Where(row =>
+                {
+                    string fullName = row["FullName"].ToString()?.ToLower() ?? "";
+                    string empCode = row["empCode"].ToString()?.ToLower() ?? "";
+
+                    // Search in name or employee code
+                    return fullName.Contains(searchText) || empCode.Contains(searchText);
+                })
+                .ToList();
+
+            if (filteredRows.Count > 0)
+            {
+                DataTable filteredTable = _allAttendanceData.Clone();
+                foreach (var row in filteredRows)
+                {
+                    filteredTable.ImportRow(row);
+                }
+                DisplayAttendanceRecords(filteredTable);
+            }
+            else
+            {
+                ShowNoSearchResultsMessage();
+            }
         }
 
         /// <summary>
@@ -53,43 +132,10 @@ namespace AttendanceFaceRocog
         {
             try
             {
-                PanelActTimeLine.Controls.Clear();
-
-                var attendanceData = DatabaseHelper.GetTodayAllAttendance();
-
-                if (attendanceData.Rows.Count == 0)
-                {
-                    ShowNoActivityMessage();
-                    return;
-                }
-
-                // Create a scrollable flow layout panel
-                var flowPanel = new FlowLayoutPanel
-                {
-                    Location = new Point(10, 10),
-                    Size = new Size(PanelActTimeLine.Width - 20, PanelActTimeLine.Height - 20),
-                    AutoScroll = true,
-                    FlowDirection = FlowDirection.TopDown,
-                    WrapContents = false,
-                    BackColor = Color.White
-                };
-
-                // Add activity items
-                foreach (DataRow row in attendanceData.Rows)
-                {
-                    var activityItem = CreateActivityTimelineItem(
-                        row["FullName"].ToString() ?? "",
-                        row["empCode"].ToString() ?? "",
-                        row["TimeIn"].ToString() ?? "",
-                        row["TimeOut"].ToString() ?? "",
-                        row["StartBreak"].ToString() ?? "",
-                        row["StopBreak"].ToString() ?? "",
-                        Convert.ToDateTime(row["LogTime"])
-                    );
-                    flowPanel.Controls.Add(activityItem);
-                }
-
-                PanelActTimeLine.Controls.Add(flowPanel);
+                // Cache all attendance data for search functionality
+                _allAttendanceData = DatabaseHelper.GetTodayAllAttendance();
+                
+                DisplayAttendanceRecords(_allAttendanceData);
             }
             catch (Exception ex)
             {
@@ -99,94 +145,113 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Creates a single activity timeline item
+        /// Display attendance records in the timeline panel
         /// </summary>
-        private Panel CreateActivityTimelineItem(string fullName, string empCode, 
-            string timeIn, string timeOut, string startBreak, string stopBreak, DateTime logTime)
+        private void DisplayAttendanceRecords(DataTable attendanceData)
         {
-            var panel = new Panel
+            PanelActTimeLine.Controls.Clear();
+
+            if (attendanceData == null || attendanceData.Rows.Count == 0)
             {
-                Size = new Size(PanelActTimeLine.Width - 50, 140),
-                BackColor = Color.White,
-                BorderStyle = BorderStyle.None,
+                ShowNoActivityMessage();
+                return;
+            }
+
+            // Create a scrollable flow layout panel
+            var flowPanel = new FlowLayoutPanel
+            {
+                Location = new Point(10, 10),
+                Size = new Size(PanelActTimeLine.Width - 20, PanelActTimeLine.Height - 20),
+                AutoScroll = true,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                BackColor = Color.Transparent,
+                Padding = new Padding(5)
+            };
+
+            // Add activity items
+            foreach (DataRow row in attendanceData.Rows)
+            {
+                var activityItem = CreateActivityTimelineItem(
+                    row["FullName"].ToString() ?? "",
+                    row["empCode"].ToString() ?? "",
+                    row["TimeIn"].ToString() ?? "",
+                    row["TimeOut"].ToString() ?? "",
+                    row["StartBreak"].ToString() ?? "",
+                    row["StopBreak"].ToString() ?? "",
+                    Convert.ToDateTime(row["LogTime"])
+                );
+                flowPanel.Controls.Add(activityItem);
+            }
+
+            PanelActTimeLine.Controls.Add(flowPanel);
+        }
+
+        /// <summary>
+        /// Create a single activity timeline item
+        /// </summary>
+        private Panel CreateActivityTimelineItem(string fullName, string empCode, string timeIn, 
+            string timeOut, string startBreak, string stopBreak, DateTime logTime)
+        {
+            var itemPanel = new Panel
+            {
+                Size = new Size(900, 100),
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.WhiteSmoke,
                 Margin = new Padding(5)
             };
 
-            // Add border effect
-            panel.Paint += (s, e) =>
-            {
-                using (var pen = new Pen(Color.FromArgb(230, 230, 230), 1))
-                {
-                    e.Graphics.DrawRectangle(pen, 0, 0, panel.Width - 1, panel.Height - 1);
-                }
-            };
-
-            // Employee info header
+            // Employee info
             var lblEmployee = new Label
             {
-                Text = $"👤 {fullName}",
-                Font = new Font("Poppins", 11F, FontStyle.Bold),
+                Text = $"👤 {fullName} ({empCode})",
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
                 ForeColor = Color.FromArgb(55, 65, 81),
-                Location = new Point(15, 10),
+                Location = new Point(10, 5),
                 AutoSize = true
             };
+            itemPanel.Controls.Add(lblEmployee);
 
-            var lblEmpCode = new Label
+            // Date/Time
+            var lblDateTime = new Label
             {
-                Text = empCode,
-                Font = new Font("Segoe UI", 9F),
+                Text = $"📅 {logTime:yyyy-MM-dd}",
+                Font = new Font("Segoe UI", 9),
                 ForeColor = Color.Gray,
-                Location = new Point(15, 35),
+                Location = new Point(10, 25),
                 AutoSize = true
             };
+            itemPanel.Controls.Add(lblDateTime);
 
-            var lblDate = new Label
-            {
-                Text = $"📅 {logTime:MMM dd, yyyy hh:mm tt}",
-                Font = new Font("Segoe UI", 8.5F),
-                ForeColor = Color.Gray,
-                Location = new Point(panel.Width - 220, 12),
-                AutoSize = true
-            };
-
-            // Activity details section
-            int yPos = 60;
-
-            // Time In
+            // Attendance details
+            int yPos = 45;
             if (!string.IsNullOrEmpty(timeIn))
             {
-                var lblTimeIn = CreateActivityLabel("🟢 Time In:", timeIn, new Point(20, yPos));
-                panel.Controls.Add(lblTimeIn);
-                yPos += 22;
+                var lblTimeIn = CreateActivityLabel("⏱️ Time In:", timeIn, new Point(10, yPos));
+                itemPanel.Controls.Add(lblTimeIn);
+                yPos += 20;
             }
 
-            // Time Out
             if (!string.IsNullOrEmpty(timeOut))
             {
-                var lblTimeOut = CreateActivityLabel("🔴 Time Out:", timeOut, new Point(20, yPos));
-                panel.Controls.Add(lblTimeOut);
-                yPos += 22;
+                var lblTimeOut = CreateActivityLabel("⏱️ Time Out:", timeOut, new Point(10, yPos));
+                itemPanel.Controls.Add(lblTimeOut);
+                yPos += 20;
             }
 
-            // Start Break
             if (!string.IsNullOrEmpty(startBreak))
             {
-                var lblStartBreak = CreateActivityLabel("☕ Start Break:", startBreak, new Point(350, 60));
-                panel.Controls.Add(lblStartBreak);
+                var lblStartBreak = CreateActivityLabel("☕ Break Start:", startBreak, new Point(450, 45));
+                itemPanel.Controls.Add(lblStartBreak);
             }
 
-            // Stop Break
             if (!string.IsNullOrEmpty(stopBreak))
             {
-                var lblStopBreak = CreateActivityLabel("↺ Stop Break:", stopBreak, new Point(350, 82));
-                panel.Controls.Add(lblStopBreak);
+                var lblStopBreak = CreateActivityLabel("☕ Break End:", stopBreak, new Point(450, 65));
+                itemPanel.Controls.Add(lblStopBreak);
             }
 
-            panel.Controls.Add(lblEmployee);
-            panel.Controls.Add(lblEmpCode);
-            panel.Controls.Add(lblDate);
-
-            return panel;
+            return itemPanel;
         }
 
         /// <summary>
@@ -219,6 +284,23 @@ namespace AttendanceFaceRocog
                 Dock = DockStyle.Fill
             };
             PanelActTimeLine.Controls.Add(lblNoData);
+        }
+
+        /// <summary>
+        /// Show message when search has no results
+        /// </summary>
+        private void ShowNoSearchResultsMessage()
+        {
+            PanelActTimeLine.Controls.Clear();
+            var lblNoResults = new Label
+            {
+                Text = "🔍 No employees found matching your search.\n\nTry searching by name or employee ID (e.g., EMP-001)",
+                Font = new Font("Segoe UI", 11F),
+                ForeColor = Color.Gray,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Dock = DockStyle.Fill
+            };
+            PanelActTimeLine.Controls.Add(lblNoResults);
         }
 
         /// <summary>

@@ -49,6 +49,10 @@
             Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges17 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
             Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges20 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
             Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges21 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
+            Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges24 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
+            Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges25 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
+            Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges22 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
+            Guna.UI2.WinForms.Suite.CustomizableEdges customizableEdges23 = new Guna.UI2.WinForms.Suite.CustomizableEdges();
             guna2Panel2 = new Guna.UI2.WinForms.Guna2Panel();
             pnlStatusBadge = new Guna.UI2.WinForms.Guna2Panel();
             pnlScannerContainer = new Guna.UI2.WinForms.Guna2Panel();
@@ -68,6 +72,8 @@
             PanelActivity = new Guna.UI2.WinForms.Guna2Panel();
             guna2HtmlLabel2 = new Guna.UI2.WinForms.Guna2HtmlLabel();
             TxtTime = new Guna.UI2.WinForms.Guna2HtmlLabel();
+            guna2Panel1 = new Guna.UI2.WinForms.Guna2Panel();
+            guna2PictureBox3 = new Guna.UI2.WinForms.Guna2PictureBox();
             guna2Panel2.SuspendLayout();
             PanelProfileStatus.SuspendLayout();
             PanelDate.SuspendLayout();
@@ -75,6 +81,8 @@
             PanelTime.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)guna2PictureBox1).BeginInit();
             ((System.ComponentModel.ISupportInitialize)ProfilePic).BeginInit();
+            guna2Panel1.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)guna2PictureBox3).BeginInit();
             SuspendLayout();
             // 
             // guna2Panel2
@@ -102,7 +110,7 @@
             pnlStatusBadge.BorderRadius = 15;
             pnlStatusBadge.CustomizableEdges = customizableEdges1;
             pnlStatusBadge.FillColor = Color.FromArgb(55, 65, 81);
-            pnlStatusBadge.Location = new Point(245, 409);
+            pnlStatusBadge.Location = new Point(236, 384);
             pnlStatusBadge.Margin = new Padding(4, 3, 4, 3);
             pnlStatusBadge.Name = "pnlStatusBadge";
             pnlStatusBadge.ShadowDecoration.CustomizableEdges = customizableEdges2;
@@ -111,16 +119,16 @@
             // 
             // pnlScannerContainer
             // 
-            pnlScannerContainer.Anchor = AnchorStyles.Top;
+            pnlScannerContainer.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             pnlScannerContainer.BackColor = Color.Transparent;
             pnlScannerContainer.BorderRadius = 20;
             pnlScannerContainer.CustomizableEdges = customizableEdges3;
             pnlScannerContainer.FillColor = Color.FromArgb(17, 24, 39);
-            pnlScannerContainer.Location = new Point(108, 110);
+            pnlScannerContainer.Location = new Point(27, 26);
             pnlScannerContainer.Margin = new Padding(4, 3, 4, 3);
             pnlScannerContainer.Name = "pnlScannerContainer";
             pnlScannerContainer.ShadowDecoration.CustomizableEdges = customizableEdges4;
-            pnlScannerContainer.Size = new Size(415, 293);
+            pnlScannerContainer.Size = new Size(559, 352);
             pnlScannerContainer.TabIndex = 0;
             // 
             // PanelProfileStatus
@@ -138,7 +146,7 @@
             PanelProfileStatus.Controls.Add(ProfilePic);
             PanelProfileStatus.CustomizableEdges = customizableEdges18;
             PanelProfileStatus.FillColor = Color.White;
-            PanelProfileStatus.Location = new Point(623, 3);
+            PanelProfileStatus.Location = new Point(0, 0);
             PanelProfileStatus.Margin = new Padding(4, 3, 4, 3);
             PanelProfileStatus.Name = "PanelProfileStatus";
             PanelProfileStatus.ShadowDecoration.CustomizableEdges = customizableEdges19;
@@ -335,13 +343,43 @@
             TxtTime.TabIndex = 11;
             TxtTime.Text = "00:00 AM";
             // 
+            // guna2Panel1
+            // 
+            guna2Panel1.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right;
+            guna2Panel1.BackColor = Color.Transparent;
+            guna2Panel1.BorderColor = Color.FromArgb(230, 230, 230);
+            guna2Panel1.BorderRadius = 10;
+            guna2Panel1.BorderThickness = 1;
+            guna2Panel1.Controls.Add(PanelProfileStatus);
+            guna2Panel1.Controls.Add(guna2PictureBox3);
+            guna2Panel1.CustomizableEdges = customizableEdges24;
+            guna2Panel1.FillColor = Color.White;
+            guna2Panel1.Location = new Point(623, 3);
+            guna2Panel1.Margin = new Padding(4, 3, 4, 3);
+            guna2Panel1.Name = "guna2Panel1";
+            guna2Panel1.ShadowDecoration.CustomizableEdges = customizableEdges25;
+            guna2Panel1.Size = new Size(380, 294);
+            guna2Panel1.TabIndex = 9;
+            // 
+            // guna2PictureBox3
+            // 
+            guna2PictureBox3.CustomizableEdges = customizableEdges22;
+            guna2PictureBox3.Image = Properties.Resources.mdi__card_account_details;
+            guna2PictureBox3.ImageRotate = 0F;
+            guna2PictureBox3.Location = new Point(123, 74);
+            guna2PictureBox3.Name = "guna2PictureBox3";
+            guna2PictureBox3.ShadowDecoration.CustomizableEdges = customizableEdges23;
+            guna2PictureBox3.Size = new Size(150, 150);
+            guna2PictureBox3.TabIndex = 0;
+            guna2PictureBox3.TabStop = false;
+            // 
             // UserControl1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
+            Controls.Add(guna2Panel1);
             Controls.Add(PanelActivity);
             Controls.Add(guna2Panel2);
-            Controls.Add(PanelProfileStatus);
             Name = "UserControl1";
             Size = new Size(1004, 562);
             guna2Panel2.ResumeLayout(false);
@@ -354,6 +392,8 @@
             PanelTime.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)guna2PictureBox1).EndInit();
             ((System.ComponentModel.ISupportInitialize)ProfilePic).EndInit();
+            guna2Panel1.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)guna2PictureBox3).EndInit();
             ResumeLayout(false);
         }
 
@@ -378,5 +418,7 @@
         private Guna.UI2.WinForms.Guna2HtmlLabel TxtTime;
         private Guna.UI2.WinForms.Guna2HtmlLabel TxtTime1;
         private Guna.UI2.WinForms.Guna2HtmlLabel guna2HtmlLabel1;
+        private Guna.UI2.WinForms.Guna2Panel guna2Panel1;
+        private Guna.UI2.WinForms.Guna2PictureBox guna2PictureBox3;
     }
 }

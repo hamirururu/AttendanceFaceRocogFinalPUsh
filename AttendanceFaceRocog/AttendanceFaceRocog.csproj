@@ -6,7 +6,12 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>flat-color-icons--camera.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="flat-color-icons--camera.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Emgu.CV" Version="4.12.0.5764" />

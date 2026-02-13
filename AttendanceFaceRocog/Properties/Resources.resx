@@ -184,6 +184,9 @@
   <data name="lets-icons--out" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\lets-icons--out.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
+  <data name="lunch" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\lunch.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  </data>
   <data name="presony_gray" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\presony_gray.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
@@ -199,7 +202,7 @@
   <data name="hghghghgh" type="System.Resources.ResXFileRef, System.Windows.Forms">
     <value>..\Resources\hghghghgh.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
-  <data name="lunch" type="System.Resources.ResXFileRef, System.Windows.Forms">
-    <value>..\Resources\lunch.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
+  <data name="mdi--card-account-details" type="System.Resources.ResXFileRef, System.Windows.Forms">
+    <value>..\Resources\mdi--card-account-details.png;System.Drawing.Bitmap, System.Drawing, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a</value>
   </data>
 </root>
