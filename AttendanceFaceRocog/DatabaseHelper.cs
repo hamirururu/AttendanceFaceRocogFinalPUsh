@@ -1,5 +1,6 @@
 using System;
 using System.Data;
+using System.Globalization;
 using Microsoft.Data.SqlClient;
 
 namespace AttendanceFaceRocog
@@ -23,14 +24,16 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"INSERT INTO dbo.Employees (FullName) 
-                           OUTPUT INSERTED.empID 
-                           VALUES (@FullName)";
+            const string query = @"
+INSERT INTO dbo.Employees (FullName)
+OUTPUT INSERTED.empID
+VALUES (@FullName)";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@FullName", fullName);
+            AddNVarChar(cmd, "@FullName", 150, fullName);
 
-            return (int)cmd.ExecuteScalar();
+            object? result = cmd.ExecuteScalar();
+            return result is int empId ? empId : Convert.ToInt32(result);
         }
 
         /// <summary>
@@ -41,14 +44,55 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"INSERT INTO dbo.FaceImages (empID, imgPath) 
-                           VALUES (@empID, @imgPath)";
+            const string query = @"
+INSERT INTO dbo.FaceImages (empID, imgPath)
+VALUES (@empID, @imgPath)";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
-            cmd.Parameters.AddWithValue("@imgPath", imagePath);
+            AddInt(cmd, "@empID", empId);
+            AddNVarChar(cmd, "@imgPath", 255, imagePath);
 
             cmd.ExecuteNonQuery();
+        }
+
+        /// <summary>
+        /// Add or update profile photo for an employee
+        /// </summary>
+        public static void AddProfilePhoto(int empId, string photoPath)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            const string query = @"
+UPDATE dbo.Employees
+SET profilePhotoPath = @profilePhotoPath
+WHERE empID = @empID";
+
+            using var cmd = new SqlCommand(query, conn);
+            AddInt(cmd, "@empID", empId);
+            AddNVarChar(cmd, "@profilePhotoPath", 255, photoPath);
+
+            cmd.ExecuteNonQuery();
+        }
+
+        /// <summary>
+        /// Get employee profile photo path
+        /// </summary>
+        public static string? GetProfilePhoto(int empId)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            const string query = @"
+SELECT profilePhotoPath
+FROM dbo.Employees
+WHERE empID = @empID";
+
+            using var cmd = new SqlCommand(query, conn);
+            AddInt(cmd, "@empID", empId);
+
+            object? result = cmd.ExecuteScalar();
+            return result == null || result == DBNull.Value ? null : Convert.ToString(result);
         }
 
         /// <summary>
@@ -59,24 +103,27 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            // Use ROW_NUMBER() to get only the latest image per employee
-            string query = @"
-                WITH RankedImages AS (
-                    SELECT 
-                        e.empID, 
-                        e.empCode, 
-                        e.FullName, 
-                        e.profilePhotoPath,
-                        f.imgPath,
-                        ROW_NUMBER() OVER (PARTITION BY e.empID ORDER BY f.faceImageID DESC) AS rn
-                    FROM dbo.Employees e
-                    LEFT JOIN dbo.FaceImages f ON e.empID = f.empID
-                )
-                SELECT empID, empCode, FullName, 
-                       COALESCE(profilePhotoPath, imgPath) AS imgPath
-                FROM RankedImages
-                WHERE rn = 1
-                ORDER BY FullName";
+            const string query = @"
+WITH RankedImages AS
+(
+    SELECT
+        e.empID,
+        e.empCode,
+        e.FullName,
+        e.profilePhotoPath,
+        f.imgPath,
+        ROW_NUMBER() OVER (PARTITION BY e.empID ORDER BY f.faceImageID DESC) AS rn
+    FROM dbo.Employees e
+    LEFT JOIN dbo.FaceImages f ON e.empID = f.empID
+)
+SELECT
+    empID,
+    empCode,
+    FullName,
+    COALESCE(profilePhotoPath, imgPath) AS imgPath
+FROM RankedImages
+WHERE rn = 1
+ORDER BY FullName";
 
             using var cmd = new SqlCommand(query, conn);
             using var adapter = new SqlDataAdapter(cmd);
@@ -94,10 +141,15 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"SELECT e.empID, e.empCode, e.FullName, f.imgPath 
-                           FROM dbo.Employees e
-                           INNER JOIN dbo.FaceImages f ON e.empID = f.empID
-                           ORDER BY e.FullName";
+            const string query = @"
+SELECT
+    e.empID,
+    e.empCode,
+    e.FullName,
+    f.imgPath
+FROM dbo.Employees e
+INNER JOIN dbo.FaceImages f ON e.empID = f.empID
+ORDER BY e.FullName";
 
             using var cmd = new SqlCommand(query, conn);
             using var adapter = new SqlDataAdapter(cmd);
@@ -115,75 +167,110 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            string query = "SELECT empID, empCode, FullName FROM dbo.Employees WHERE empID = @empID";
+            const string query = @"
+SELECT empID, empCode, FullName
+FROM dbo.Employees
+WHERE empID = @empID";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
+            AddInt(cmd, "@empID", empId);
 
             using var reader = cmd.ExecuteReader();
             if (reader.Read())
             {
-                return (reader.GetInt32(0), reader.GetString(1), reader.GetString(2));
+                return (
+                    reader.GetInt32(0),
+                    reader.GetString(1),
+                    reader.GetString(2));
             }
+
             return null;
+        }
+
+        /// <summary>
+        /// Get the latest face image path for an employee
+        /// </summary>
+        public static string? GetEmployeeFaceImage(int empId)
+        {
+            using var conn = GetConnection();
+            conn.Open();
+
+            const string query = @"
+SELECT TOP 1 imgPath
+FROM dbo.FaceImages
+WHERE empID = @empID
+ORDER BY faceImageID DESC";
+
+            using var cmd = new SqlCommand(query, conn);
+            AddInt(cmd, "@empID", empId);
+
+            object? result = cmd.ExecuteScalar();
+            return result == null || result == DBNull.Value ? null : Convert.ToString(result);
         }
 
         /// <summary>
         /// Log attendance action - Only allows one entry per action per day
         /// Returns: (success, message)
         /// </summary>
-        public static (bool success, string message) LogAttendance(int empId, string timeIn, string timeOut, string startBr, string stopBr)
+        public static (bool success, string message) LogAttendance(int empId, string? timeIn, string? timeOut, string? startBr, string? stopBr)
         {
+            TimeSpan? timeInValue     = ParseAttendanceTime(timeIn);
+            TimeSpan? timeOutValue    = ParseAttendanceTime(timeOut);
+            TimeSpan? startBreakValue = ParseAttendanceTime(startBr);
+            TimeSpan? stopBreakValue  = ParseAttendanceTime(stopBr);
+
             using var conn = GetConnection();
             conn.Open();
 
-            // Check if a record exists for this employee today
-            string checkQuery = @"SELECT attendanceID, TimeIn, TimeOut, StartBreak, StopBreak 
-                                 FROM dbo.Attendance 
-                                 WHERE empID = @empID AND CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
+            const string checkQuery = @"
+SELECT TOP 1 attendanceID, TimeIn, TimeOut, StartBreak, StopBreak
+FROM dbo.Attendance
+WHERE empID = @empID
+  AND CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)
+ORDER BY attendanceID DESC";
 
             using var checkCmd = new SqlCommand(checkQuery, conn);
-            checkCmd.Parameters.AddWithValue("@empID", empId);
+            AddInt(checkCmd, "@empID", empId);
 
             using var reader = checkCmd.ExecuteReader();
 
             if (reader.Read())
             {
-                int attendanceId = reader.GetInt32(0);
-                string existingTimeIn = reader.IsDBNull(1) ? "" : reader.GetString(1);
-                string existingTimeOut = reader.IsDBNull(2) ? "" : reader.GetString(2);
-                string existingStartBreak = reader.IsDBNull(3) ? "" : reader.GetString(3);
-                string existingStopBreak = reader.IsDBNull(4) ? "" : reader.GetString(4);
+                int attendanceId  = reader.GetInt32(0);
+                bool hasTimeIn    = !reader.IsDBNull(1);
+                bool hasTimeOut   = !reader.IsDBNull(2);
+                bool hasStartBreak = !reader.IsDBNull(3);
+                bool hasStopBreak  = !reader.IsDBNull(4);
 
                 reader.Close();
 
-                // Check if the action is already recorded
-                if (!string.IsNullOrEmpty(timeIn) && !string.IsNullOrEmpty(existingTimeIn))
+                if (timeInValue.HasValue && hasTimeIn)
                     return (false, "Time In already recorded today.");
 
-                if (!string.IsNullOrEmpty(timeOut) && !string.IsNullOrEmpty(existingTimeOut))
+                if (timeOutValue.HasValue && hasTimeOut)
                     return (false, "Time Out already recorded today.");
 
-                if (!string.IsNullOrEmpty(startBr) && !string.IsNullOrEmpty(existingStartBreak))
+                if (startBreakValue.HasValue && hasStartBreak)
                     return (false, "Start Break already recorded today.");
 
-                if (!string.IsNullOrEmpty(stopBr) && !string.IsNullOrEmpty(existingStopBreak))
+                if (stopBreakValue.HasValue && hasStopBreak)
                     return (false, "Stop Break already recorded today.");
 
-                // Update only empty fields
-                string updateQuery = @"UPDATE dbo.Attendance SET 
-                                      TimeIn = CASE WHEN @TimeIn != '' AND TimeIn IS NULL THEN @TimeIn ELSE TimeIn END,
-                                      TimeOut = CASE WHEN @TimeOut != '' AND TimeOut IS NULL THEN @TimeOut ELSE TimeOut END,
-                                      StartBreak = CASE WHEN @StartBreak != '' AND StartBreak IS NULL THEN @StartBreak ELSE StartBreak END,
-                                      StopBreak = CASE WHEN @StopBreak != '' AND StopBreak IS NULL THEN @StopBreak ELSE StopBreak END
-                                      WHERE attendanceID = @attendanceID";
+                const string updateQuery = @"
+UPDATE dbo.Attendance
+SET
+    TimeIn     = CASE WHEN @TimeIn     IS NOT NULL AND TimeIn     IS NULL THEN @TimeIn     ELSE TimeIn     END,
+    TimeOut    = CASE WHEN @TimeOut    IS NOT NULL AND TimeOut    IS NULL THEN @TimeOut    ELSE TimeOut    END,
+    StartBreak = CASE WHEN @StartBreak IS NOT NULL AND StartBreak IS NULL THEN @StartBreak ELSE StartBreak END,
+    StopBreak  = CASE WHEN @StopBreak  IS NOT NULL AND StopBreak  IS NULL THEN @StopBreak  ELSE StopBreak  END
+WHERE attendanceID = @attendanceID";
 
                 using var updateCmd = new SqlCommand(updateQuery, conn);
-                updateCmd.Parameters.AddWithValue("@TimeIn", timeIn ?? "");
-                updateCmd.Parameters.AddWithValue("@TimeOut", timeOut ?? "");
-                updateCmd.Parameters.AddWithValue("@StartBreak", startBr ?? "");
-                updateCmd.Parameters.AddWithValue("@StopBreak", stopBr ?? "");
-                updateCmd.Parameters.AddWithValue("@attendanceID", attendanceId);
+                AddNullableTime(updateCmd, "@TimeIn",      timeInValue);
+                AddNullableTime(updateCmd, "@TimeOut",     timeOutValue);
+                AddNullableTime(updateCmd, "@StartBreak",  startBreakValue);
+                AddNullableTime(updateCmd, "@StopBreak",   stopBreakValue);
+                AddInt(updateCmd, "@attendanceID", attendanceId);
 
                 updateCmd.ExecuteNonQuery();
             }
@@ -191,16 +278,17 @@ namespace AttendanceFaceRocog
             {
                 reader.Close();
 
-                // Insert new record for today
-                string insertQuery = @"INSERT INTO dbo.Attendance (empID, TimeIn, TimeOut, StartBreak, StopBreak, LogTime) 
-                                      VALUES (@empID, @TimeIn, @TimeOut, @StartBreak, @StopBreak, GETDATE())";
+                const string insertQuery = @"
+INSERT INTO dbo.Attendance (empID, TimeIn, TimeOut, StartBreak, StopBreak, LogTime)
+VALUES (@empID, @TimeIn, @TimeOut, @StartBreak, @StopBreak, @LogTime)";
 
                 using var insertCmd = new SqlCommand(insertQuery, conn);
-                insertCmd.Parameters.AddWithValue("@empID", empId);
-                insertCmd.Parameters.AddWithValue("@TimeIn", timeIn ?? "");
-                insertCmd.Parameters.AddWithValue("@TimeOut", timeOut ?? "");
-                insertCmd.Parameters.AddWithValue("@StartBreak", startBr ?? "");
-                insertCmd.Parameters.AddWithValue("@StopBreak", stopBr ?? "");
+                AddInt(insertCmd, "@empID", empId);
+                AddNullableTime(insertCmd, "@TimeIn",     timeInValue);
+                AddNullableTime(insertCmd, "@TimeOut",    timeOutValue);
+                AddNullableTime(insertCmd, "@StartBreak", startBreakValue);
+                AddNullableTime(insertCmd, "@StopBreak",  stopBreakValue);
+                AddDateTime(insertCmd, "@LogTime", DateTime.Now);
 
                 insertCmd.ExecuteNonQuery();
             }
@@ -209,64 +297,28 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Get the most recent face image for an employee
-        /// </summary>
-        public static string? GetEmployeeFaceImage(int empId)
-        {
-            try
-            {
-                using (SqlConnection con = new SqlConnection(ConnectionString))
-                {
-                    con.Open();
-
-                    string query = @"SELECT TOP 1 imgPath 
-                           FROM dbo.FaceImages 
-                           WHERE empID = @empID 
-                           ORDER BY faceImageID DESC";
-
-                    using (SqlCommand cmd = new SqlCommand(query, con))
-                    {
-                        cmd.Parameters.AddWithValue("@empID", empId);
-
-                        object? result = cmd.ExecuteScalar();
-
-                        if (result != null && result != DBNull.Value)
-                        {
-                            return result.ToString();
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error getting employee face image: {ex.Message}");
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Get attendance history for an employee (last 7 days by default)
+        /// Get employee attendance history
         /// </summary>
         public static DataTable GetEmployeeAttendanceHistory(int empId, int days = 7)
         {
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"SELECT 
-                               CONVERT(VARCHAR(10), LogTime, 120) AS [Date],
-                               TimeIn AS [Time In],
-                               TimeOut AS [Time Out],
-                               StartBreak AS [Start Break],
-                               StopBreak AS [Stop Break]
-                           FROM dbo.Attendance 
-                           WHERE empID = @empID 
-                             AND LogTime >= DATEADD(DAY, -@Days, GETDATE())
-                           ORDER BY LogTime DESC";
+            const string query = @"
+SELECT
+    CONVERT(VARCHAR(10), LogTime, 120) AS [Date],
+    CONVERT(VARCHAR(8), TimeIn) AS [Time In],
+    CONVERT(VARCHAR(8), TimeOut) AS [Time Out],
+    CONVERT(VARCHAR(8), StartBreak) AS [Start Break],
+    CONVERT(VARCHAR(8), StopBreak) AS [Stop Break]
+FROM dbo.Attendance
+WHERE empID = @empID
+  AND LogTime >= DATEADD(DAY, -@Days, GETDATE())
+ORDER BY LogTime DESC";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
-            cmd.Parameters.AddWithValue("@Days", days);
+            AddInt(cmd, "@empID", empId);
+            AddInt(cmd, "@Days", days);
 
             using var adapter = new SqlDataAdapter(cmd);
             DataTable dt = new DataTable();
@@ -276,29 +328,35 @@ namespace AttendanceFaceRocog
 
         /// <summary>
         /// Get today's attendance status for an employee
-        /// Returns which actions have already been recorded
+        /// Returns: (hasTimeIn, hasTimeOut, hasStartBreak, hasStopBreak)
         /// </summary>
         public static (bool hasTimeIn, bool hasTimeOut, bool hasStartBreak, bool hasStopBreak) GetTodayAttendanceStatus(int empId)
         {
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"SELECT TimeIn, TimeOut, StartBreak, StopBreak 
-                     FROM dbo.Attendance 
-                     WHERE empID = @empID AND CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
+            const string query = @"
+SELECT TOP 1
+    CAST(CASE WHEN TimeIn     IS NOT NULL THEN 1 ELSE 0 END AS bit) AS hasTimeIn,
+    CAST(CASE WHEN TimeOut    IS NOT NULL THEN 1 ELSE 0 END AS bit) AS hasTimeOut,
+    CAST(CASE WHEN StartBreak IS NOT NULL THEN 1 ELSE 0 END AS bit) AS hasStartBreak,
+    CAST(CASE WHEN StopBreak  IS NOT NULL THEN 1 ELSE 0 END AS bit) AS hasStopBreak
+FROM dbo.Attendance
+WHERE empID = @empID
+  AND CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)
+ORDER BY attendanceID DESC";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
+            AddInt(cmd, "@empID", empId);
 
             using var reader = cmd.ExecuteReader();
             if (reader.Read())
             {
-                bool hasTimeIn = !reader.IsDBNull(0) && !string.IsNullOrEmpty(reader.GetString(0));
-                bool hasTimeOut = !reader.IsDBNull(1) && !string.IsNullOrEmpty(reader.GetString(1));
-                bool hasStartBreak = !reader.IsDBNull(2) && !string.IsNullOrEmpty(reader.GetString(2));
-                bool hasStopBreak = !reader.IsDBNull(3) && !string.IsNullOrEmpty(reader.GetString(3));
-
-                return (hasTimeIn, hasTimeOut, hasStartBreak, hasStopBreak);
+                return (
+                    reader.GetBoolean(0),
+                    reader.GetBoolean(1),
+                    reader.GetBoolean(2),
+                    reader.GetBoolean(3));
             }
 
             return (false, false, false, false);
@@ -312,144 +370,146 @@ namespace AttendanceFaceRocog
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"SELECT 
-                        a.attendanceID,
-                        a.empID,
-                        e.FullName,
-                        e.empCode,
-                        a.TimeIn,
-                        a.TimeOut,
-                        a.StartBreak,
-                        a.StopBreak,
-                        a.LogTime
-                   FROM dbo.Attendance a
-                   INNER JOIN dbo.Employees e ON a.empID = e.empID
-                   WHERE CAST(a.LogTime AS DATE) = CAST(GETDATE() AS DATE)
-                   ORDER BY a.LogTime DESC";
+            const string query = @"
+SELECT
+    a.attendanceID,
+    a.empID,
+    e.FullName,
+    e.empCode,
+    CONVERT(VARCHAR(8), a.TimeIn) AS TimeIn,
+    CONVERT(VARCHAR(8), a.TimeOut) AS TimeOut,
+    CONVERT(VARCHAR(8), a.StartBreak) AS StartBreak,
+    CONVERT(VARCHAR(8), a.StopBreak) AS StopBreak,
+    a.LogTime
+FROM dbo.Attendance a
+INNER JOIN dbo.Employees e ON a.empID = e.empID
+WHERE CAST(a.LogTime AS DATE) = CAST(GETDATE() AS DATE)
+ORDER BY a.LogTime DESC";
 
             using var cmd = new SqlCommand(query, conn);
             using var adapter = new SqlDataAdapter(cmd);
-    
+
             DataTable dt = new DataTable();
             adapter.Fill(dt);
             return dt;
         }
 
         /// <summary>
-        /// Get attendance statistics for today
+        /// Get today's attendance statistics
         /// </summary>
         public static (int timeInCount, int timeOutCount, int startBreakCount, int stopBreakCount) GetTodayAttendanceStats()
         {
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"SELECT 
-                        COUNT(CASE WHEN TimeIn IS NOT NULL AND TimeIn != '' THEN 1 END) AS TimeInCount,
-                        COUNT(CASE WHEN TimeOut IS NOT NULL AND TimeOut != '' THEN 1 END) AS TimeOutCount,
-                        COUNT(CASE WHEN StartBreak IS NOT NULL AND StartBreak != '' THEN 1 END) AS StartBreakCount,
-                        COUNT(CASE WHEN StopBreak IS NOT NULL AND StopBreak != '' THEN 1 END) AS StopBreakCount
-                   FROM dbo.Attendance
-                   WHERE CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
+            const string query = @"
+SELECT
+    COUNT(CASE WHEN TimeIn IS NOT NULL THEN 1 END) AS TimeInCount,
+    COUNT(CASE WHEN TimeOut IS NOT NULL THEN 1 END) AS TimeOutCount,
+    COUNT(CASE WHEN StartBreak IS NOT NULL THEN 1 END) AS StartBreakCount,
+    COUNT(CASE WHEN StopBreak IS NOT NULL THEN 1 END) AS StopBreakCount
+FROM dbo.Attendance
+WHERE CAST(LogTime AS DATE) = CAST(GETDATE() AS DATE)";
 
             using var cmd = new SqlCommand(query, conn);
             using var reader = cmd.ExecuteReader();
-    
+
             if (reader.Read())
             {
                 return (
                     reader.GetInt32(0),
                     reader.GetInt32(1),
                     reader.GetInt32(2),
-                    reader.GetInt32(3)
-                );
+                    reader.GetInt32(3));
             }
 
             return (0, 0, 0, 0);
         }
 
         /// <summary>
-        /// Update employee name
+        /// Update an existing employee's details
         /// </summary>
-        public static void UpdateEmployee(int empId, string fullName)
+        public static void UpdateEmployee(int empId, string fullName, string empCode)
         {
             using var conn = GetConnection();
             conn.Open();
 
-            string query = @"UPDATE dbo.Employees 
-                     SET FullName = @FullName 
-                     WHERE empID = @empID";
+            const string query = @"
+UPDATE dbo.Employees
+SET FullName = @FullName,
+    empCode  = @empCode
+WHERE empID = @empID";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@FullName", fullName);
-            cmd.Parameters.AddWithValue("@empID", empId);
+            AddNVarChar(cmd, "@FullName", 150, fullName);
+            AddNVarChar(cmd, "@empCode",  20,  empCode);
+            AddInt(cmd, "@empID", empId);
 
             cmd.ExecuteNonQuery();
         }
 
         /// <summary>
-        /// Delete employee and all related data (cascade handled by FK constraint)
+        /// Delete an employee by ID
         /// </summary>
         public static void DeleteEmployee(int empId)
         {
             using var conn = GetConnection();
             conn.Open();
-            
-            // Delete attendance records
-            using (var cmd = new SqlCommand("DELETE FROM dbo.Attendance WHERE empID = @empId", conn))
-            {
-                cmd.Parameters.AddWithValue("@empId", empId);
-                cmd.ExecuteNonQuery();
-            }
 
-            // Delete face images (FK constraint will handle cascade)
-            using (var cmd = new SqlCommand("DELETE FROM dbo.FaceImages WHERE empID = @empId", conn))
-            {
-                cmd.Parameters.AddWithValue("@empId", empId);
-                cmd.ExecuteNonQuery();
-            }
-            
-            // Delete employee
-            using (var cmd = new SqlCommand("DELETE FROM dbo.Employees WHERE empID = @empId", conn))
-            {
-                cmd.Parameters.AddWithValue("@empId", empId);
-                cmd.ExecuteNonQuery();
-            }
-        }
-
-        /// <summary>
-        /// Add/Update a full profile photo for an employee
-        /// </summary>
-        public static void AddProfilePhoto(int empId, string photoPath)
-        {
-            using var conn = GetConnection();
-            conn.Open();
-
-            string query = @"UPDATE dbo.Employees 
-                           SET profilePhotoPath = @profilePhotoPath 
-                           WHERE empID = @empID";
+            const string query = @"
+DELETE FROM dbo.Employees
+WHERE empID = @empID";
 
             using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
-            cmd.Parameters.AddWithValue("@profilePhotoPath", photoPath);
+            AddInt(cmd, "@empID", empId);
 
             cmd.ExecuteNonQuery();
         }
 
-        /// <summary>
-        /// Get profile photo path for an employee
-        /// </summary>
-        public static string? GetProfilePhoto(int empId)
+        private static TimeSpan? ParseAttendanceTime(string? value)
         {
-            using var conn = GetConnection();
-            conn.Open();
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
 
-            string query = @"SELECT profilePhotoPath FROM dbo.Employees WHERE empID = @empID";
+            string[] formats =
+            {
+                "hh:mm:ss tt",
+                "h:mm:ss tt",
+                "HH:mm:ss",
+                "H:mm:ss",
+                "hh:mm tt",
+                "h:mm tt",
+                "HH:mm",
+                "H:mm"
+            };
 
-            using var cmd = new SqlCommand(query, conn);
-            cmd.Parameters.AddWithValue("@empID", empId);
+            if (DateTime.TryParseExact(value.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime exact))
+                return exact.TimeOfDay;
 
-            var result = cmd.ExecuteScalar();
-            return result != null && result != DBNull.Value ? result.ToString() : null;
+            if (DateTime.TryParse(value.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed))
+                return parsed.TimeOfDay;
+
+            return null;
+        }
+
+        private static void AddInt(SqlCommand cmd, string name, int value)
+        {
+            cmd.Parameters.Add(name, SqlDbType.Int).Value = value;
+        }
+
+        private static void AddDateTime(SqlCommand cmd, string name, DateTime value)
+        {
+            cmd.Parameters.Add(name, SqlDbType.DateTime2).Value = value;
+        }
+
+        private static void AddNVarChar(SqlCommand cmd, string name, int size, string value)
+        {
+            cmd.Parameters.Add(name, SqlDbType.NVarChar, size).Value = value;
+        }
+
+        private static void AddNullableTime(SqlCommand cmd, string name, TimeSpan? value)
+        {
+            cmd.Parameters.Add(name, SqlDbType.Time).Value = value.HasValue ? value.Value : DBNull.Value;
         }
     }
 }

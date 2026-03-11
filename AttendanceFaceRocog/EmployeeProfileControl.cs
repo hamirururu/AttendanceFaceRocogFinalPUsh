@@ -432,7 +432,7 @@ namespace AttendanceFaceRocog
             var dialog = new Form
             {
                 Text = "Edit Employee",
-                Size = new Size(400, 200),
+                Size = new Size(400, 260),
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
@@ -442,34 +442,50 @@ namespace AttendanceFaceRocog
 
             var lblTitle = new Label
             {
-                Text = $"Edit Employee - {empCode}",
+                Text = $"Edit Employee",
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 ForeColor = Color.FromArgb(55, 65, 81),
-                Location = new Point(20, 20),
+                Location = new Point(20, 15),
                 AutoSize = true
+            };
+
+            var lblCode = new Label
+            {
+                Text = "Employee Code:",
+                Font = new Font("Segoe UI", 10F),
+                Location = new Point(20, 50),
+                AutoSize = true
+            };
+
+            var txtCode = new TextBox
+            {
+                Text = empCode,
+                Location = new Point(20, 70),
+                Size = new Size(340, 28),
+                Font = new Font("Segoe UI", 11F)
             };
 
             var lblName = new Label
             {
                 Text = "Full Name:",
                 Font = new Font("Segoe UI", 10F),
-                Location = new Point(20, 60),
+                Location = new Point(20, 110),
                 AutoSize = true
             };
 
             var txtName = new TextBox
             {
                 Text = currentName,
-                Location = new Point(20, 85),
-                Size = new Size(340, 30),
+                Location = new Point(20, 130),
+                Size = new Size(340, 28),
                 Font = new Font("Segoe UI", 11F)
             };
 
             var btnSave = new Button
             {
                 Text = "Save",
-                Location = new Point(20, 125),
-                Size = new Size(160, 35),
+                Location = new Point(20, 178),
+                Size = new Size(160, 38),
                 BackColor = Color.FromArgb(16, 185, 129),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -481,8 +497,8 @@ namespace AttendanceFaceRocog
             var btnCancel = new Button
             {
                 Text = "Cancel",
-                Location = new Point(200, 125),
-                Size = new Size(160, 35),
+                Location = new Point(200, 178),
+                Size = new Size(160, 38),
                 BackColor = Color.FromArgb(229, 231, 235),
                 ForeColor = Color.FromArgb(55, 65, 81),
                 FlatStyle = FlatStyle.Flat,
@@ -500,9 +516,25 @@ namespace AttendanceFaceRocog
                     return;
                 }
 
-                DatabaseHelper.UpdateEmployee(empId, txtName.Text);
-                dialog.DialogResult = DialogResult.OK;
-                dialog.Close();
+                if (string.IsNullOrWhiteSpace(txtCode.Text))
+                {
+                    MessageBox.Show("Please enter an employee code.", "Required",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                try
+                {
+                    DatabaseHelper.UpdateEmployee(empId, txtName.Text.Trim(), txtCode.Text.Trim());
+                    dialog.DialogResult = DialogResult.OK;
+                    dialog.Close();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"Failed to update employee.\n\n{ex.Message}",
+                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             };
 
             btnCancel.Click += (s, e) =>
@@ -511,7 +543,7 @@ namespace AttendanceFaceRocog
                 dialog.Close();
             };
 
-            dialog.Controls.AddRange(new Control[] { lblTitle, lblName, txtName, btnSave, btnCancel });
+            dialog.Controls.AddRange(new Control[] { lblTitle, lblCode, txtCode, lblName, txtName, btnSave, btnCancel });
             dialog.AcceptButton = btnSave;
             dialog.CancelButton = btnCancel;
 
@@ -844,12 +876,12 @@ namespace AttendanceFaceRocog
                 // Add employee to database
                 int empId = DatabaseHelper.AddEmployee(TxtEnterName.Text);
 
-                // ✅ STEP 1: Capture 4 GRAYSCALE face images for training
+                // ✅ STEP 1: Capture multiple LIVE frames for training
                 BtnAdd.Text = "Capturing training images...";
                 await Task.Delay(100);
 
                 System.Collections.Generic.List<string> trainingImagePaths =
-                    _faceService.CaptureMultipleFaces(_lastFrame, empId, 4);
+                    await CaptureTrainingImagesFromLiveFramesAsync(empId, 6);
 
                 if (trainingImagePaths.Count == 0)
                 {
@@ -927,35 +959,56 @@ namespace AttendanceFaceRocog
             try
             {
                 Rectangle[] faces = _faceService.DetectFaces(frame);
-                if (faces.Length == 0) return null;
+                if (faces.Length == 0)
+                    return null;
 
-                // Get the largest face
                 Rectangle face = faces.OrderByDescending(f => f.Width * f.Height).First();
 
-                // Add padding around face (20%)
-                int padding = (int)(face.Width * 0.2);
-                int x = Math.Max(0, face.X - padding);
-                int y = Math.Max(0, face.Y - padding);
-                int width = Math.Min(frame.Width - x, face.Width + 2 * padding);
-                int height = Math.Min(frame.Height - y, face.Height + 2 * padding);
+                int paddingX = (int)(face.Width * 0.35);
+                int paddingTop = (int)(face.Height * 0.45);
+                int paddingBottom = (int)(face.Height * 0.25);
 
-                Rectangle paddedFace = new Rectangle(x, y, width, height);
+                int cropX = Math.Max(0, face.X - paddingX);
+                int cropY = Math.Max(0, face.Y - paddingTop);
+                int cropRight = Math.Min(frame.Width, face.Right + paddingX);
+                int cropBottom = Math.Min(frame.Height, face.Bottom + paddingBottom);
 
-                // Extract COLORED face region
-                Mat coloredFaceRegion = new Mat(frame, paddedFace);
+                int cropWidth = cropRight - cropX;
+                int cropHeight = cropBottom - cropY;
 
-                // Save as colored JPEG
+                int squareSize = Math.Max(cropWidth, cropHeight);
+                int centerX = cropX + (cropWidth / 2);
+                int centerY = cropY + (cropHeight / 2);
+
+                int squareX = Math.Max(0, centerX - (squareSize / 2));
+                int squareY = Math.Max(0, centerY - (squareSize / 2));
+
+                if (squareX + squareSize > frame.Width)
+                    squareX = frame.Width - squareSize;
+
+                if (squareY + squareSize > frame.Height)
+                    squareY = frame.Height - squareSize;
+
+                squareX = Math.Max(0, squareX);
+                squareY = Math.Max(0, squareY);
+                squareSize = Math.Min(squareSize, Math.Min(frame.Width - squareX, frame.Height - squareY));
+
+                Rectangle squareCrop = new Rectangle(squareX, squareY, squareSize, squareSize);
+
+                using var coloredFaceRegion = new Mat(frame, squareCrop);
+                using var resizedFace = new Mat();
+
+                CvInvoke.Resize(coloredFaceRegion, resizedFace, new Size(300, 300), 0, 0, Inter.Cubic);
+
                 string fileName = $"emp_{empId}_profile_color_{DateTime.Now:yyyyMMddHHmmss}.jpg";
                 string filePath = Path.Combine(
                     Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Faces"),
                     fileName);
 
-                Bitmap bmp = coloredFaceRegion.ToBitmap();
+                using Bitmap bmp = resizedFace.ToBitmap();
                 bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Jpeg);
-                bmp.Dispose();
-                coloredFaceRegion.Dispose();
 
-                System.Diagnostics.Debug.WriteLine($"✓ Colored profile photo saved: {filePath}");
+                System.Diagnostics.Debug.WriteLine($"✓ Centered colored profile photo saved: {filePath}");
                 return filePath;
             }
             catch (Exception ex)
@@ -996,6 +1049,26 @@ namespace AttendanceFaceRocog
         {
             PanelDetails.Visible = false;
             PanelProfileList.BringToFront();
+        }
+
+        private async Task<System.Collections.Generic.List<string>> CaptureTrainingImagesFromLiveFramesAsync(int empId, int frameSamples = 6)
+        {
+            var savedPaths = new System.Collections.Generic.List<string>();
+
+            for (int i = 0; i < frameSamples; i++)
+            {
+                if (_lastFrame != null && !_lastFrame.IsEmpty)
+                {
+                    using Mat sampleFrame = _lastFrame.Clone();
+                    var paths = _faceService.CaptureMultipleFaces(sampleFrame, empId, 1);
+                    savedPaths.AddRange(paths);
+                }
+
+                UpdateRecognitionStatus($"● Capturing training images... {i + 1}/{frameSamples}", Color.DodgerBlue);
+                await Task.Delay(250);
+            }
+
+            return savedPaths;
         }
     }
 }

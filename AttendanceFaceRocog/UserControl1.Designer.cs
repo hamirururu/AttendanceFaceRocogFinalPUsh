@@ -303,6 +303,7 @@
             ProfilePic.ShadowDecoration.CustomizableEdges = customizableEdges17;
             ProfilePic.ShadowDecoration.Mode = Guna.UI2.WinForms.Enums.ShadowMode.Circle;
             ProfilePic.Size = new Size(90, 90);
+            ProfilePic.SizeMode = PictureBoxSizeMode.Zoom;
             ProfilePic.TabIndex = 2;
             ProfilePic.TabStop = false;
             // 

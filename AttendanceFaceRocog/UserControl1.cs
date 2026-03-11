@@ -26,13 +26,16 @@ namespace AttendanceFaceRocog
         private int? _recognizedEmpId;
         private string? _recognizedEmpName;
 
+        // Liveness detection service
+        private readonly LivenessDetectionService _livenessService = new();
+
         // Recognition state tracking
         private bool _isRecognitionStable = false;
         private bool _hasLoggedAttendance = false;
 
-        // Timer to auto-clear profile status - CHANGED TO 2 SECONDS
+        // Timer to auto-clear profile status
         private System.Windows.Forms.Timer? _autoClearTimer;
-        private const int AUTO_CLEAR_DELAY_MS = 2000;  // Changed from 5000 to 2000 (2 seconds)
+        private const int AUTO_CLEAR_DELAY_MS = 1200;
 
         // Auto-scanning flag
         private bool _isAutoScanEnabled = true;
@@ -42,16 +45,16 @@ namespace AttendanceFaceRocog
         private bool _isCleanedUp = false;
 
         // Time period definitions
-        private static readonly TimeSpan EARLY_LOGIN_END = new TimeSpan(9, 0, 0);      // 9:00 AM
-        private static readonly TimeSpan MORNING_WORK_END = new TimeSpan(12, 0, 0);    // 12:00 PM
-        private static readonly TimeSpan LUNCH_END = new TimeSpan(13, 0, 0);           // 1:00 PM
-        private static readonly TimeSpan AFTERNOON_WORK_END = new TimeSpan(18, 0, 0);  // 6:00 PM
+        private static readonly TimeSpan EARLY_LOGIN_END = new TimeSpan(9, 0, 0);
+        private static readonly TimeSpan MORNING_WORK_END = new TimeSpan(12, 0, 0);
+        private static readonly TimeSpan LUNCH_END = new TimeSpan(13, 0, 0);
+        private static readonly TimeSpan AFTERNOON_WORK_END = new TimeSpan(18, 0, 0);
 
         // Auto camera on/off based on face presence
         private System.Windows.Forms.Timer? _facePresenceTimer;
-        private const int NO_FACE_TIMEOUT_MS = 3000;  // Turn off after 3 seconds of no face
+        private const int NO_FACE_TIMEOUT_MS = 3000;
         private int _noFaceFrameCount = 0;
-        private const int NO_FACE_FRAME_THRESHOLD = 30;  // ~1 second at 30fps
+        private const int NO_FACE_FRAME_THRESHOLD = 30;
         private bool _isCameraStandby = false;
         private Panel? _standbyOverlay;
 
@@ -65,13 +68,11 @@ namespace AttendanceFaceRocog
             CreateStatusLabel();
             InitializeProfilePanel();
             InitializeAutoClearTimer();
-            InitializeFacePresenceTimer();  // Add this line
-            
-            // Initialize face service in constructor to avoid null reference
+            InitializeFacePresenceTimer();
+
             InitializeFaceService();
 
-            // Auto-start camera when control loads
-            this.Load += UserControl1_Load;
+            Load += UserControl1_Load;
         }
 
         /// <summary>
@@ -81,25 +82,31 @@ namespace AttendanceFaceRocog
         {
             try
             {
-                // Use singleton instance - shared across all controls
+                if (_faceService != null)
+                {
+                    _faceService.ModelRetrained -= OnModelRetrained;
+                }
+
                 _faceService = FaceRecognitionService.Instance;
                 _faceService.TrainModel();
-                
-                // Subscribe to model retrained event
+                _faceService.ModelRetrained -= OnModelRetrained;
                 _faceService.ModelRetrained += OnModelRetrained;
-                
+
                 System.Diagnostics.Debug.WriteLine($"Face service initialized. Trained: {_faceService.IsModelTrained}, Employees: {_faceService.TrainedEmployeeCount}");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error initializing face service: {ex.Message}");
-                MessageBox.Show($"Error: {ex.Message}\n\nInner: {ex.InnerException?.Message}",
-                    "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(
+                    $"Error: {ex.Message}\n\nInner: {ex.InnerException?.Message}",
+                    "Initialization Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
         }
 
         /// <summary>
-        /// Called when face model is retrained (e.g., new employee added)
+        /// Called when face model is retrained
         /// </summary>
         private void OnModelRetrained(object? sender, EventArgs e)
         {
@@ -115,7 +122,7 @@ namespace AttendanceFaceRocog
             await Task.Delay(500);
 
             // Check if cleanup was called during the delay
-            if (_isCleanedUp || this.IsDisposed || !this.Visible)
+            if (_isCleanedUp || IsDisposed || !Visible)
                 return;
 
             // Auto-start the camera
@@ -134,11 +141,9 @@ namespace AttendanceFaceRocog
             _autoClearTimer?.Stop();
             ClearProfileStatus();
 
-            // Reset for next scan
             _hasLoggedAttendance = false;
             _isProcessingAttendance = false;
 
-            // Restart camera for next employee
             if (_isAutoScanEnabled && !_isCameraRunning)
             {
                 AutoStartCamera();
@@ -147,9 +152,9 @@ namespace AttendanceFaceRocog
 
         private void ClearProfileStatus()
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(ClearProfileStatus));
+                Invoke(new Action(ClearProfileStatus));
                 return;
             }
 
@@ -160,6 +165,12 @@ namespace AttendanceFaceRocog
             ProfilePic.Image = null;
             TxtTime1.Text = "";
             TxtDate.Text = "";
+
+            _recognizedEmpId = null;
+            _recognizedEmpName = null;
+            _isRecognitionStable = false;
+            _faceService?.ClearRecognitionHistory();
+            _livenessService.Reset();
 
             PanelActionStatus.FillColor = Color.White;
             foreach (Control ctrl in PanelActionStatus.Controls)
@@ -197,7 +208,7 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Initialize timer for face presence detection (auto on/off)
+        /// Initialize timer for face presence detection
         /// </summary>
         private void InitializeFacePresenceTimer()
         {
@@ -212,8 +223,7 @@ namespace AttendanceFaceRocog
         private void FacePresenceTimer_Tick(object? sender, EventArgs e)
         {
             _facePresenceTimer?.Stop();
-            
-            // Only go to standby if not processing attendance
+
             if (!_isProcessingAttendance && !_hasLoggedAttendance)
             {
                 EnterStandbyMode();
@@ -250,8 +260,7 @@ namespace AttendanceFaceRocog
         private string? HandleAttendanceByTime()
         {
             AttendancePeriod period = GetCurrentTimePeriod();
-            
-            // Get current status if employee is recognized
+
             var status = (hasTimeIn: false, hasTimeOut: false, hasStartBreak: false, hasStopBreak: false);
             if (_recognizedEmpId.HasValue)
             {
@@ -261,42 +270,38 @@ namespace AttendanceFaceRocog
             switch (period)
             {
                 case AttendancePeriod.EarlyLogin:
-                    // Before 9:00 AM - Ask user what action to perform
                     return ShowEarlyLoginDialog();
 
                 case AttendancePeriod.MorningWork:
-                    // 9:00 AM - 11:59 AM - Auto Time In (if not already done)
                     if (status.hasTimeIn)
                     {
                         ShowAlreadyTimedInMessage();
-                        return null; // Don't show dialog, just display profile
+                        return null;
                     }
                     return "TimeIn";
 
                 case AttendancePeriod.LunchBreak:
-                    // 12:00 PM - 1:00 PM - Show break options
                     return ShowLunchBreakDialog();
 
                 case AttendancePeriod.AfternoonWork:
-                    // 1:00 PM - 5:59 PM - Auto Time In (if not already done)
                     if (!status.hasTimeIn)
                     {
-                        // Automatically Time In
                         return "TimeIn";
                     }
                     else
                     {
-                        // Already timed in - show message and display profile details
                         ShowAlreadyTimedInMessage();
-                        return null; // Return null to skip logging, profile will be displayed
+                        return null;
                     }
 
                 case AttendancePeriod.AfterWork:
-                    // After 6:00 PM - Auto Time Out (if not already done)
                     if (status.hasTimeOut)
                     {
-                        MessageBox.Show("Time Out has already been recorded for today.",
-                            "Already Recorded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show(
+                            "Time Out has already been recorded for today.",
+                            "Already Recorded",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
                         return null;
                     }
                     return "TimeOut";
@@ -312,31 +317,32 @@ namespace AttendanceFaceRocog
         private void ShowAlreadyTimedInMessage()
         {
             if (!_recognizedEmpId.HasValue) return;
-            
+
             var empDetails = DatabaseHelper.GetEmployeeById(_recognizedEmpId.Value);
-            if (empDetails.HasValue)
-            {
-                // Display the employee profile
-                DisplayAttendanceConfirmation(empDetails.Value.empId, empDetails.Value.fullName, "Already Logged");
-                
-                MessageBox.Show(
-                    $"✓ Welcome back, {empDetails.Value.fullName}!\n\n" +
-                    $"Time In has already been recorded for today.\n" +
-                    $"Your attendance is confirmed.",
-                    "Already Timed In",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-                
-                // Mark as logged to prevent re-processing
-                _hasLoggedAttendance = true;
-                
-                // Start auto-clear timer to reset the UI
-                StartAutoClearTimer();
-            }
+            if (!empDetails.HasValue) return;
+
+            selectedAction = "AlreadyLogged";
+
+            DisplayAttendanceConfirmation(
+                empDetails.Value.empId,
+                empDetails.Value.empCode,
+                empDetails.Value.fullName,
+                "Already Logged");
+
+            MessageBox.Show(
+                $"✓ Welcome back, {empDetails.Value.fullName}!\n\n" +
+                "Time In has already been recorded for today.\n" +
+                "Your attendance is already confirmed.",
+                "Already Timed In",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+
+            _hasLoggedAttendance = true;
+            StartAutoClearTimer();
         }
 
         /// <summary>
-        /// Shows dialog for early login (before 9:00 AM)
+        /// Shows dialog for early login
         /// </summary>
         private string? ShowEarlyLoginDialog()
         {
@@ -350,11 +356,12 @@ namespace AttendanceFaceRocog
                     return dialog.Tag?.ToString();
                 }
             }
+
             return null;
         }
 
         /// <summary>
-        /// Shows dialog for lunch break (12:00 PM - 1:00 PM)
+        /// Shows dialog for lunch break
         /// </summary>
         private string? ShowLunchBreakDialog()
         {
@@ -368,6 +375,7 @@ namespace AttendanceFaceRocog
                     return dialog.Tag?.ToString();
                 }
             }
+
             return null;
         }
 
@@ -386,6 +394,7 @@ namespace AttendanceFaceRocog
                     return dialog.Tag?.ToString();
                 }
             }
+
             return null;
         }
 
@@ -416,7 +425,6 @@ namespace AttendanceFaceRocog
             };
             dialog.Controls.Add(lblMessage);
 
-            // Get attendance status for the recognized employee
             var status = (hasTimeIn: false, hasTimeOut: false, hasStartBreak: false, hasStopBreak: false);
             if (_recognizedEmpId.HasValue)
             {
@@ -437,7 +445,6 @@ namespace AttendanceFaceRocog
                 };
                 btn.FlatAppearance.BorderSize = 0;
 
-                // Check if action is already completed
                 bool isDisabled = action switch
                 {
                     "Time In" => status.hasTimeIn,
@@ -447,7 +454,6 @@ namespace AttendanceFaceRocog
                     _ => false
                 };
 
-                // Style based on action type
                 switch (action)
                 {
                     case "Time In":
@@ -490,6 +496,7 @@ namespace AttendanceFaceRocog
                         dialog.Tag = action.Replace(" ", "");
                         dialog.DialogResult = DialogResult.OK;
                     }
+
                     dialog.Close();
                 };
 
@@ -499,10 +506,6 @@ namespace AttendanceFaceRocog
 
             return dialog;
         }
-
-        /// <summary>
-        /// Updates button states based on current time period
-        /// </summary>
 
         private void HighlightButton(Guna.UI2.WinForms.Guna2Button btn, Color color)
         {
@@ -520,13 +523,11 @@ namespace AttendanceFaceRocog
         /// </summary>
         private void AutoStartCamera()
         {
-            // Don't start if already cleaned up or disposed
-            if (_isCleanedUp || this.IsDisposed || !this.Visible)
+            if (_isCleanedUp || IsDisposed || !Visible)
                 return;
 
             if (_isCameraRunning) return;
 
-            // Ensure face service is initialized
             if (_faceService == null)
             {
                 InitializeFaceService();
@@ -548,20 +549,6 @@ namespace AttendanceFaceRocog
                 BackColor = Color.Black
             };
             pnlScannerContainer.Controls.Add(picCamera);
-
-            // Don't create new face service here - it's already initialized in constructor
-            // Just ensure it's trained
-            if (_faceService != null)
-            {
-                try
-                {
-                    _faceService.TrainModel();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error training model: {ex.Message}");
-                }
-            }
         }
 
         private void StartCamera()
@@ -580,7 +567,6 @@ namespace AttendanceFaceRocog
                     {
                         _capture.Set(CapProp.FrameWidth, 640);
                         _capture.Set(CapProp.FrameHeight, 480);
-                        // DO NOT set FPS yet
 
                         cameraOpened = true;
                         break;
@@ -615,6 +601,12 @@ namespace AttendanceFaceRocog
             _isCameraStandby = false;
             _noFaceFrameCount = 0;
 
+            _recognizedEmpId = null;
+            _recognizedEmpName = null;
+            _isRecognitionStable = false;
+            _faceService?.ClearRecognitionHistory();
+            _livenessService.Reset();
+
             if (_capture != null)
             {
                 _capture.ImageGrabbed -= ProcessFrame;
@@ -624,12 +616,12 @@ namespace AttendanceFaceRocog
             }
 
             _isCameraRunning = false;
-            
-            if (picCamera != null) 
+
+            if (picCamera != null)
             {
                 picCamera.Image = null;
             }
-            
+
             if (_standbyOverlay != null)
             {
                 _standbyOverlay.Visible = false;
@@ -645,19 +637,16 @@ namespace AttendanceFaceRocog
         {
             if (picCamera == null || picCamera.IsDisposed || _capture == null) return;
 
-            Mat frame = new Mat();
+            using Mat frame = new Mat();
 
             try
             {
                 _capture.Retrieve(frame);
-
-                // ✅ ADD THIS LINE - MIRROR THE CAMERA (HORIZONTAL FLIP)
                 CvInvoke.Flip(frame, frame, FlipType.Horizontal);
 
-                ProcessFaceDetection(frame); // recognition uses mirrored frame
+                ProcessFaceDetection(frame);
 
-                Mat display = frame.Clone();
-
+                using Mat display = frame.Clone();
                 Rectangle crop = GetCenterCrop(display.Size, picCamera.Size);
 
                 using (Mat cropped = new Mat(display, crop))
@@ -672,16 +661,10 @@ namespace AttendanceFaceRocog
                         picCamera.Image = bmp;
                     });
                 }
-
-                display.Dispose();
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.ToString());
-            }
-            finally
-            {
-                frame.Dispose();
+                System.Diagnostics.Debug.WriteLine($"ProcessFrame error: {ex.Message}");
             }
         }
 
@@ -709,7 +692,7 @@ namespace AttendanceFaceRocog
         /// </summary>
         private void ProcessFaceDetection(Mat frame)
         {
-            if (_faceService == null || _isProcessingAttendance)
+            if (_faceService == null || _isProcessingAttendance || _hasLoggedAttendance)
             {
                 return;
             }
@@ -725,46 +708,67 @@ namespace AttendanceFaceRocog
 
                     if (emp.HasValue)
                     {
-                        // FACE DETECTED - Reset no-face counter and exit standby
                         _noFaceFrameCount = 0;
                         _facePresenceTimer?.Stop();
-                        
+
                         if (_isCameraStandby)
                         {
                             ExitStandbyMode();
                         }
 
-                        _recognizedEmpId = emp.Value.empId;
-                        _recognizedEmpName = emp.Value.fullName;
-                        _isRecognitionStable = isStable;
-
-                        if (isStable)
+                        Rectangle? primaryFace = GetPrimaryFaceForDisplay(frame);
+                        if (!primaryFace.HasValue)
                         {
-                            UpdateStatus($"●  {emp.Value.fullName}", Color.LimeGreen);
+                            _recognizedEmpId = null;
+                            _recognizedEmpName = null;
+                            _isRecognitionStable = false;
+                            _livenessService.Reset();
+                            UpdateStatus("●  Position face properly", Color.FromArgb(249, 115, 22));
+                            return;
+                        }
 
-                            // Auto-log attendance when recognition is stable
-                            if (!_hasLoggedAttendance && !_isProcessingAttendance)
-                            {
-                                _isProcessingAttendance = true;
-                                AutoLogAttendance();
-                            }
+                        var liveness = _livenessService.Evaluate(frame, primaryFace.Value);
+                        var color = (isStable && liveness.IsLive)
+                            ? new MCvScalar(0, 255, 0)
+                            : new MCvScalar(0, 165, 255);
+
+                        Rectangle face = primaryFace.Value;
+                        CvInvoke.Rectangle(frame, face, color, 3);
+
+                        string displayText;
+                        if (!liveness.IsLive)
+                        {
+                            displayText = "Anti-Spoof Check";
+                            UpdateStatus($"●  {liveness.Message}", Color.FromArgb(249, 115, 22));
+                        }
+                        else if (!isStable)
+                        {
+                            displayText = "Verifying...";
+                            UpdateStatus("●  Verifying...", Color.FromArgb(249, 115, 22));
                         }
                         else
                         {
-                            UpdateStatus("●  Verifying...", Color.FromArgb(249, 115, 22));
+                            displayText = emp.Value.fullName;
+                            UpdateStatus($"●  {emp.Value.fullName}", Color.LimeGreen);
                         }
 
-                        // Draw face rectangles
-                        var faces = _faceService.DetectFaces(frame);
-                        foreach (var face in faces)
-                        {
-                            var color = isStable ? new MCvScalar(0, 255, 0) : new MCvScalar(0, 165, 255);
-                            CvInvoke.Rectangle(frame, face, color, 3);
+                        CvInvoke.PutText(
+                            frame,
+                            displayText,
+                            new Point(face.X, face.Y - 10),
+                            FontFace.HersheySimplex,
+                            0.7,
+                            color,
+                            2);
 
-                            string displayText = isStable ? emp.Value.fullName : "Verifying...";
-                            CvInvoke.PutText(frame, displayText,
-                                new Point(face.X, face.Y - 10),
-                                FontFace.HersheySimplex, 0.7, color, 2);
+                        _recognizedEmpId = emp.Value.empId;
+                        _recognizedEmpName = emp.Value.fullName;
+                        _isRecognitionStable = isStable && liveness.IsLive;
+
+                        if (_isRecognitionStable && !_hasLoggedAttendance && !_isProcessingAttendance)
+                        {
+                            _isProcessingAttendance = true;
+                            _ = VerifyWithWindowsHelloAndLogAttendanceAsync();
                         }
                     }
                 }
@@ -774,10 +778,9 @@ namespace AttendanceFaceRocog
 
                     if (faces.Length > 0)
                     {
-                        // UNKNOWN FACE DETECTED - Still counts as face present
                         _noFaceFrameCount = 0;
                         _facePresenceTimer?.Stop();
-                        
+
                         if (_isCameraStandby)
                         {
                             ExitStandbyMode();
@@ -791,19 +794,27 @@ namespace AttendanceFaceRocog
                         foreach (var face in faces)
                         {
                             CvInvoke.Rectangle(frame, face, new MCvScalar(0, 0, 255), 3);
-                            CvInvoke.PutText(frame, "Unknown",
+                            CvInvoke.PutText(
+                                frame,
+                                "Unknown",
                                 new Point(face.X, face.Y - 10),
-                                FontFace.HersheySimplex, 0.7, new MCvScalar(0, 0, 255), 2);
+                                FontFace.HersheySimplex,
+                                0.7,
+                                new MCvScalar(0, 0, 255),
+                                2);
                         }
                     }
                     else
                     {
-                        // NO FACE DETECTED - Increment counter
+                        _livenessService.Reset();
+
                         _noFaceFrameCount++;
-                        
+                        _recognizedEmpId = null;
+                        _recognizedEmpName = null;
+                        _isRecognitionStable = false;
+
                         if (_noFaceFrameCount >= NO_FACE_FRAME_THRESHOLD)
                         {
-                            // Start timeout timer if not already running
                             if (!_facePresenceTimer!.Enabled && !_isCameraStandby)
                             {
                                 _facePresenceTimer.Start();
@@ -812,9 +823,6 @@ namespace AttendanceFaceRocog
                         }
                         else
                         {
-                            _recognizedEmpId = null;
-                            _recognizedEmpName = null;
-                            _isRecognitionStable = false;
                             UpdateStatus("●  Scanning...", Color.FromArgb(156, 163, 175));
                         }
                     }
@@ -824,6 +832,42 @@ namespace AttendanceFaceRocog
             {
                 System.Diagnostics.Debug.WriteLine($"Face detection error: {ex.Message}");
             }
+        }
+
+        private void ApplyFixedBackgroundBlur(Mat frame)
+        {
+            if (frame.IsEmpty)
+                return;
+
+            using Mat original = frame.Clone();
+            using Mat blurred = new Mat();
+            using Mat mask = new Mat(frame.Rows, frame.Cols, Emgu.CV.CvEnum.DepthType.Cv8U, 1);
+
+            CvInvoke.GaussianBlur(original, blurred, new Size(55, 55), 0);
+            mask.SetTo(new MCvScalar(0));
+
+            int clearWidth = (int)(frame.Width * 0.42);
+            int clearHeight = (int)(frame.Height * 0.78);
+
+            Point center = new Point(frame.Width / 2, frame.Height / 2);
+            Size axes = new Size(clearWidth / 2, clearHeight / 2);
+
+            CvInvoke.Ellipse(mask, center, axes, 0, 0, 360, new MCvScalar(255), -1);
+
+            original.CopyTo(blurred, mask);
+            blurred.CopyTo(frame);
+        }
+
+        private Rectangle? GetPrimaryFaceForDisplay(Mat frame)
+        {
+            if (_faceService == null || frame.IsEmpty)
+                return null;
+
+            Rectangle[] faces = _faceService.DetectCloseFaces(frame);
+            if (faces.Length == 0)
+                return null;
+
+            return faces[0];
         }
 
         #endregion
@@ -841,91 +885,83 @@ namespace AttendanceFaceRocog
                 return;
             }
 
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(AutoLogAttendance));
+                Invoke(new Action(AutoLogAttendance));
                 return;
             }
 
+            int empId = _recognizedEmpId.Value;
+
             try
             {
-                // Get the action based on time rules
                 string? action = HandleAttendanceByTime();
 
                 if (string.IsNullOrEmpty(action))
                 {
-                    // Action was handled internally (e.g., already timed in message shown)
-                    // or user cancelled - stop camera but don't restart immediately
                     _isProcessingAttendance = false;
-                    StopCamera();
+                    UpdateStatus("●  No attendance action available", Color.Orange);
                     return;
                 }
 
                 selectedAction = action;
                 string currentTime = DateTime.Now.ToString("hh:mm:ss tt");
 
-                // Execute the appropriate logging method
                 bool success = false;
                 string message = "";
 
                 switch (action)
                 {
                     case "TimeIn":
-                        (success, message) = LogTimeIn(_recognizedEmpId.Value, currentTime);
+                        (success, message) = LogTimeIn(empId, currentTime);
                         break;
                     case "TimeOut":
-                        (success, message) = LogTimeOut(_recognizedEmpId.Value, currentTime);
+                        (success, message) = LogTimeOut(empId, currentTime);
                         break;
                     case "StartBreak":
-                        (success, message) = LogStartBreak(_recognizedEmpId.Value, currentTime);
+                        (success, message) = LogStartBreak(empId, currentTime);
                         break;
                     case "StopBreak":
-                        (success, message) = LogStopBreak(_recognizedEmpId.Value, currentTime);
+                        (success, message) = LogStopBreak(empId, currentTime);
                         break;
                 }
 
-                _hasLoggedAttendance = true;
-
-                // Stop camera after logging
-                StopCamera();
-
                 if (success)
                 {
-                    var empDetails = DatabaseHelper.GetEmployeeById(_recognizedEmpId.Value);
+                    _hasLoggedAttendance = true;
+                    _isProcessingAttendance = false;
+
+                    var empDetails = DatabaseHelper.GetEmployeeById(empId);
                     if (empDetails.HasValue)
                     {
-                        DisplayAttendanceConfirmation(empDetails.Value.empId, empDetails.Value.fullName, currentTime);
+                        DisplayAttendanceConfirmation(
+                            empDetails.Value.empId,
+                            empDetails.Value.empCode,
+                            empDetails.Value.fullName,
+                            currentTime);
                     }
 
+                    _recognizedEmpId = null;
+                    _recognizedEmpName = null;
+                    _isRecognitionStable = false;
+                    _faceService?.ClearRecognitionHistory();
+                    _livenessService.Reset();
+
+                    UpdateStatus($"●  {FormatActionName(action)} recorded", Color.LimeGreen);
                     StartAutoClearTimer();
                 }
                 else
                 {
-                    // REMOVED: MessageBox.Show() - No message box for already recorded
-                    // Just update status and restart camera
-                    UpdateStatus($"⚠️ {message}", Color.Orange);
-
+                    _hasLoggedAttendance = false;
                     _isProcessingAttendance = false;
-
-                    // Restart camera for next attempt after 2 seconds
-                    if (_isAutoScanEnabled)
-                    {
-                        _ = Task.Delay(2000).ContinueWith(_ =>
-                        {
-                            if (!_isCameraRunning)
-                            {
-                                this.Invoke(new Action(AutoStartCamera));
-                            }
-                        });
-                    }
+                    UpdateStatus($"⚠️ {message}", Color.Orange);
                 }
             }
             catch (Exception ex)
             {
-                // REMOVED: MessageBox.Show() for error message
-                // Just log and update status
-                System.Diagnostics.Debug.WriteLine($"Error logging attendance: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error logging attendance: {ex}");
                 UpdateStatus("❌ Error recording attendance", Color.Red);
+                _hasLoggedAttendance = false;
                 _isProcessingAttendance = false;
             }
         }
@@ -934,33 +970,16 @@ namespace AttendanceFaceRocog
         /// Logs Time In for an employee
         /// </summary>
         private (bool success, string message) LogTimeIn(int empId, string time)
-        {
-            return DatabaseHelper.LogAttendance(empId, time, "", "", "");
-        }
+            => DatabaseHelper.LogAttendance(empId, time, null, null, null);
 
-        /// <summary>
-        /// Logs Time Out for an employee
-        /// </summary>
         private (bool success, string message) LogTimeOut(int empId, string time)
-        {
-            return DatabaseHelper.LogAttendance(empId, "", time, "", "");
-        }
+            => DatabaseHelper.LogAttendance(empId, null, time, null, null);
 
-        /// <summary>
-        /// Logs Start Break for an employee
-        /// </summary>
         private (bool success, string message) LogStartBreak(int empId, string time)
-        {
-            return DatabaseHelper.LogAttendance(empId, "", "", time, "");
-        }
+            => DatabaseHelper.LogAttendance(empId, null, null, time, null);
 
-        /// <summary>
-        /// Logs Stop Break for an employee
-        /// </summary>
         private (bool success, string message) LogStopBreak(int empId, string time)
-        {
-            return DatabaseHelper.LogAttendance(empId, "", "", "", time);
-        }
+            => DatabaseHelper.LogAttendance(empId, null, null, null, time);
 
         private string FormatActionName(string action)
         {
@@ -970,8 +989,20 @@ namespace AttendanceFaceRocog
                 "TimeOut" => "Time Out",
                 "StartBreak" => "Start Break",
                 "StopBreak" => "Stop Break",
+                "AlreadyLogged" => "Already Timed In",
                 _ => action
             };
+        }
+
+        private void ShowAttendanceRecordedMessage(string fullName, string action, string time)
+        {
+            string actionName = FormatActionName(action);
+
+            MessageBox.Show(
+                $"✓ {actionName} recorded for {fullName}.\n\nTime: {time}",
+                "Attendance Recorded",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
         }
 
         private void StartAutoClearTimer()
@@ -988,6 +1019,8 @@ namespace AttendanceFaceRocog
             if (_recognizedEmpId == null || _isProcessingAttendance)
                 return;
 
+            int empId = _recognizedEmpId.Value;
+
             _isProcessingAttendance = true;
 
             Task.Run(async () =>
@@ -998,10 +1031,10 @@ namespace AttendanceFaceRocog
 
                     (bool success, string message) result = action switch
                     {
-                        "TimeIn" => LogTimeIn(_recognizedEmpId.Value, currentTime),
-                        "TimeOut" => LogTimeOut(_recognizedEmpId.Value, currentTime),
-                        "StartBreak" => LogStartBreak(_recognizedEmpId.Value, currentTime),
-                        "StopBreak" => LogStopBreak(_recognizedEmpId.Value, currentTime),
+                        "TimeIn" => LogTimeIn(empId, currentTime),
+                        "TimeOut" => LogTimeOut(empId, currentTime),
+                        "StartBreak" => LogStartBreak(empId, currentTime),
+                        "StopBreak" => LogStopBreak(empId, currentTime),
                         _ => (false, "Invalid action")
                     };
 
@@ -1009,32 +1042,30 @@ namespace AttendanceFaceRocog
 
                     if (success)
                     {
-                        var empDetails = DatabaseHelper.GetEmployeeById(_recognizedEmpId.Value);
+                        var empDetails = DatabaseHelper.GetEmployeeById(empId);
                         if (empDetails.HasValue)
                         {
-                            DisplayAttendanceConfirmation(empDetails.Value.empId, empDetails.Value.fullName, currentTime);
+                            DisplayAttendanceConfirmation(
+                                empDetails.Value.empId,
+                                empDetails.Value.empCode,
+                                empDetails.Value.fullName,
+                                currentTime);
                         }
 
-                        // REMOVED: MessageBox.Show() - No message box displayed
-                        // Camera will reload after 2 seconds automatically
                         StartAutoClearTimer();
                     }
                     else
                     {
-                        // REMOVED: MessageBox.Show() for duplicate message
-                        // Just update status and restart camera
                         UpdateStatus($"⚠️ {message}", Color.Orange);
-
                         _isProcessingAttendance = false;
 
-                        // Restart camera for next attempt after 2 seconds
                         if (_isAutoScanEnabled)
                         {
                             _ = Task.Delay(2000).ContinueWith(_ =>
                             {
                                 if (!_isCameraRunning)
                                 {
-                                    this.Invoke(new Action(AutoStartCamera));
+                                    Invoke(new Action(AutoStartCamera));
                                 }
                             });
                         }
@@ -1042,7 +1073,6 @@ namespace AttendanceFaceRocog
                 }
                 catch (Exception ex)
                 {
-                    // REMOVED: MessageBox.Show() for error
                     System.Diagnostics.Debug.WriteLine($"Error logging attendance: {ex.Message}");
                     UpdateStatus("❌ Error recording attendance", Color.Red);
                     _isProcessingAttendance = false;
@@ -1054,23 +1084,27 @@ namespace AttendanceFaceRocog
 
         #region UI Display Methods
 
-        private void DisplayAttendanceConfirmation(int empId, string fullName, string actionTime)
+        private void DisplayAttendanceConfirmation(int empId, string empCode, string fullName, string actionTime)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(() => DisplayAttendanceConfirmation(empId, fullName, actionTime)));
+                Invoke(new Action(() => DisplayAttendanceConfirmation(empId, empCode, fullName, actionTime)));
                 return;
             }
 
             try
             {
-                // ✅ CHANGED: Get colored profile photo (not grayscale training image)
                 string? profilePhotoPath = DatabaseHelper.GetProfilePhoto(empId);
 
                 LblFullName.Text = fullName;
-                LblEmployeeID.Text = $"EMP-{empId:D3}";
+                LblEmployeeID.Text = empCode;
 
-                // ✅ Display COLORED profile photo
+                ProfilePic.SizeMode = PictureBoxSizeMode.Zoom;
+
+                Image? oldImage = ProfilePic.Image;
+                ProfilePic.Image = null;
+                oldImage?.Dispose();
+
                 if (!string.IsNullOrEmpty(profilePhotoPath) && File.Exists(profilePhotoPath))
                 {
                     using (var img = Image.FromFile(profilePhotoPath))
@@ -1080,7 +1114,6 @@ namespace AttendanceFaceRocog
                 }
                 else
                 {
-                    // Fallback to default avatar if no profile photo
                     ProfilePic.Image = CreateDefaultAvatar();
                 }
 
@@ -1146,18 +1179,27 @@ namespace AttendanceFaceRocog
                     PanelActionStatus.FillColor = Color.FromArgb(139, 92, 246);
                     actionLabel.Text = "↺ STOP BREAK\nAttendance Recorded";
                     break;
+                case "AlreadyLogged":
+                    PanelActionStatus.FillColor = Color.FromArgb(59, 130, 246);
+                    actionLabel.Text = "✓ ALREADY TIMED IN\nAttendance Confirmed";
+                    break;
+                default:
+                    PanelActionStatus.FillColor = Color.FromArgb(55, 65, 81);
+                    actionLabel.Text = "ATTENDANCE\nProcessed";
+                    break;
             }
         }
 
         private Bitmap CreateDefaultAvatar()
         {
             Bitmap bmp = new Bitmap(100, 100);
+
             using (Graphics g = Graphics.FromImage(bmp))
             {
                 g.Clear(Color.FromArgb(200, 200, 200));
-                g.DrawString("?", new Font("Segoe UI", 40, FontStyle.Bold),
-                    Brushes.Gray, new PointF(30, 20));
+                g.DrawString("?", new Font("Segoe UI", 40, FontStyle.Bold), Brushes.Gray, new PointF(30, 20));
             }
+
             return bmp;
         }
 
@@ -1180,9 +1222,9 @@ namespace AttendanceFaceRocog
 
         private void DisplayEmployeeActivity(int empId)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(() => DisplayEmployeeActivity(empId)));
+                Invoke(new Action(() => DisplayEmployeeActivity(empId)));
                 return;
             }
 
@@ -1233,8 +1275,8 @@ namespace AttendanceFaceRocog
                         row["Time In"]?.ToString() ?? "-",
                         row["Time Out"]?.ToString() ?? "-",
                         row["Start Break"]?.ToString() ?? "-",
-                        row["Stop Break"]?.ToString() ?? "-"
-                    );
+                        row["Stop Break"]?.ToString() ?? "-");
+
                     flowPanel.Controls.Add(activityPanel);
                 }
 
@@ -1267,8 +1309,7 @@ namespace AttendanceFaceRocog
 
             var detailsLabel = new Label
             {
-                Text = $"🟢 In: {(string.IsNullOrEmpty(timeIn) ? "-" : timeIn)}   " +
-                       $"🔴 Out: {(string.IsNullOrEmpty(timeOut) ? "-" : timeOut)}",
+                Text = $"🟢 In: {(string.IsNullOrEmpty(timeIn) ? "-" : timeIn)}   🔴 Out: {(string.IsNullOrEmpty(timeOut) ? "-" : timeOut)}",
                 Font = new Font("Segoe UI", 8.5F),
                 ForeColor = Color.FromArgb(107, 114, 128),
                 Location = new Point(8, 28),
@@ -1296,13 +1337,11 @@ namespace AttendanceFaceRocog
             int panelWidth = guna2Panel2.ClientSize.Width;
             int panelHeight = guna2Panel2.ClientSize.Height;
 
-            // Desired aspect ratio (559x466)
             float ratio = 559f / 466f;
 
             int width = panelWidth - 40;
             int height = (int)(width / ratio);
 
-            // If too tall, fit by height instead
             if (height > panelHeight - 120)
             {
                 height = panelHeight - 120;
@@ -1310,69 +1349,8 @@ namespace AttendanceFaceRocog
             }
 
             pnlScannerContainer.Size = new Size(width, height);
-
-            // ✅ auto keep center
             pnlScannerContainer.Left = (panelWidth - width) / 2;
             pnlScannerContainer.Top = 20;
-        }
-
-
-        #endregion
-
-        #region Layout
-
-        protected override void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
-
-        }
-
-        #endregion
-
-        #region Button Click Events
-
-        private void BtnStartScan_Click(object? sender, EventArgs e)
-        {
-            _autoClearTimer?.Stop();
-
-            if (!_isCameraRunning)
-            {
-                _isAutoScanEnabled = true;
-                AutoStartCamera();
-            }
-            else
-            {
-                _isAutoScanEnabled = false;
-                StopCamera();
-            }
-        }
-
-        private void BtnTimeIn_Click(object? sender, EventArgs e)
-        {
-            selectedAction = "TimeIn";
-            _hasLoggedAttendance = false;
-            _isProcessingAttendance = false;
-        }
-
-        private void BtnTimeOut_Click(object? sender, EventArgs e)
-        {
-            selectedAction = "TimeOut";
-            _hasLoggedAttendance = false;
-            _isProcessingAttendance = false;
-        }
-
-        private void BtnStartBreak_Click(object? sender, EventArgs e)
-        {
-            selectedAction = "StartBreak";
-            _hasLoggedAttendance = false;
-            _isProcessingAttendance = false;
-        }
-
-        private void BtnStopBreak_Click(object? sender, EventArgs e)
-        {
-            selectedAction = "StopBreak";
-            _hasLoggedAttendance = false;
-            _isProcessingAttendance = false;
         }
 
         #endregion
@@ -1380,46 +1358,48 @@ namespace AttendanceFaceRocog
         #region Cleanup
 
         /// <summary>
-/// Cleanup all resources - call when control is being removed/hidden
-/// </summary>
-public void Cleanup()
-{
-    _isCleanedUp = true;
-    _isAutoScanEnabled = false;
-    
-    _facePresenceTimer?.Stop();
-    _facePresenceTimer?.Dispose();
-    _autoClearTimer?.Stop();
-    _autoClearTimer?.Dispose();
-    
-    StopCamera();
-    _faceService?.Dispose();
-}
+        /// Cleanup all resources
+        /// </summary>
+        public void Cleanup()
+        {
+            _isCleanedUp = true;
+            _isAutoScanEnabled = false;
+
+            _facePresenceTimer?.Stop();
+            _facePresenceTimer?.Dispose();
+            _autoClearTimer?.Stop();
+            _autoClearTimer?.Dispose();
+
+            StopCamera();
+
+            if (_faceService != null)
+            {
+                _faceService.ModelRetrained -= OnModelRetrained;
+                _faceService = null;
+            }
+        }
 
         #endregion
 
         #region Visibility Handling
 
         /// <summary>
-        /// Stops camera when control becomes invisible (navigating to another control)
+        /// Stops camera when control becomes invisible
         /// </summary>
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);
 
-            // Don't do anything if already cleaned up
             if (_isCleanedUp) return;
 
-            if (!this.Visible)
+            if (!Visible)
             {
-                // Stop camera when control is hidden
                 _isAutoScanEnabled = false;
                 _autoClearTimer?.Stop();
                 StopCamera();
             }
-            else if (this.Visible && !_isCameraRunning)
+            else if (Visible && !_isCameraRunning)
             {
-                // Restart camera when control becomes visible again
                 _isAutoScanEnabled = true;
                 AutoStartCamera();
             }
@@ -1427,24 +1407,23 @@ public void Cleanup()
 
         #endregion
 
-        #region New Methods for Standby Mode
+        #region Standby Mode
 
         /// <summary>
-        /// Enter standby mode - camera stays ready but shows overlay
+        /// Enter standby mode
         /// </summary>
         private void EnterStandbyMode()
         {
             if (_isCameraStandby || !_isCameraRunning) return;
-            
+
             _isCameraStandby = true;
-            
-            if (this.InvokeRequired)
+
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(EnterStandbyMode));
+                Invoke(new Action(EnterStandbyMode));
                 return;
             }
-            
-            // Create standby overlay if not exists
+
             if (_standbyOverlay == null)
             {
                 _standbyOverlay = new Panel
@@ -1452,7 +1431,7 @@ public void Cleanup()
                     Dock = DockStyle.Fill,
                     BackColor = Color.FromArgb(20, 20, 20)
                 };
-                
+
                 var lblStandby = new Label
                 {
                     Text = "👤\n\nApproach camera to scan",
@@ -1462,65 +1441,113 @@ public void Cleanup()
                     Dock = DockStyle.Fill,
                     BackColor = Color.Transparent
                 };
-                
+
                 _standbyOverlay.Controls.Add(lblStandby);
             }
-            
-            // Show overlay on top of camera
+
             if (!pnlScannerContainer.Controls.Contains(_standbyOverlay))
             {
                 pnlScannerContainer.Controls.Add(_standbyOverlay);
             }
+
             _standbyOverlay.BringToFront();
             _standbyOverlay.Visible = true;
-            
+
             UpdateStatus("●  Waiting for face...", Color.FromArgb(100, 100, 100));
-            
+
             System.Diagnostics.Debug.WriteLine("Camera entered standby mode");
         }
 
         /// <summary>
-        /// Exit standby mode - show live camera feed
+        /// Exit standby mode
         /// </summary>
         private void ExitStandbyMode()
         {
             if (!_isCameraStandby) return;
-            
+
             _isCameraStandby = false;
-            
-            if (this.InvokeRequired)
+
+            if (InvokeRequired)
             {
-                this.Invoke(new Action(ExitStandbyMode));
+                Invoke(new Action(ExitStandbyMode));
                 return;
             }
-            
-            // Hide standby overlay
+
             if (_standbyOverlay != null)
             {
                 _standbyOverlay.Visible = false;
             }
-            
+
             UpdateStatus("●  Face detected - Scanning...", Color.LimeGreen);
-            
+
             System.Diagnostics.Debug.WriteLine("Camera exited standby mode");
         }
 
         #endregion
-    }
 
-    #region Enums
+        private async Task VerifyWithWindowsHelloAndLogAttendanceAsync()
+        {
+            try
+            {
+                UpdateStatus("●  Waiting for Windows Hello...", Color.DeepSkyBlue);
 
-    /// <summary>
-    /// Defines the attendance time periods
-    /// </summary>
-    public enum AttendancePeriod
-    {
-        EarlyLogin,      // Before 9:00 AM
-        MorningWork,     // 9:00 AM - 11:59 AM
-        LunchBreak,      // 12:00 PM - 1:00 PM
-        AfternoonWork,   // 1:01 PM - 5:59 PM
-        AfterWork        // 6:00 PM onwards
+                var hello = await WindowsHelloService.VerifyAsync();
+                if (!hello.Success)
+                {
+                    bool canBypassHello =
+                        hello.Message.Contains("device not present", StringComparison.OrdinalIgnoreCase) ||
+                        hello.Message.Contains("not configured", StringComparison.OrdinalIgnoreCase);
+
+                    if (canBypassHello)
+                    {
+                        UpdateStatus("●  Windows Hello unavailable - continuing scan...", Color.Orange);
+                        AutoLogAttendance();
+                        return;
+                    }
+
+                    UpdateStatus($"●  {hello.Message}", Color.Orange);
+
+                    MessageBox.Show(
+                        hello.Message,
+                        "Windows Hello Verification",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+
+                    _isProcessingAttendance = false;
+                    return;
+                }
+
+                AutoLogAttendance();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Windows Hello verification error: {ex}");
+                UpdateStatus("●  Windows Hello verification failed.", Color.Red);
+
+                MessageBox.Show(
+                    "Windows Hello verification failed. Please try again.",
+                    "Windows Hello Verification",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                _isProcessingAttendance = false;
+            }
+        }
+
+        #region Enums
+
+        /// <summary>
+        /// Defines the attendance time periods
+        /// </summary>
+        public enum AttendancePeriod
+        {
+            EarlyLogin,
+            MorningWork,
+            LunchBreak,
+            AfternoonWork,
+            AfterWork
+        }
+
+        #endregion
     }
 }
-
-    #endregion

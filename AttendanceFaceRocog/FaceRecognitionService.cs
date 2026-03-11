@@ -44,17 +44,18 @@ namespace AttendanceFaceRocog
 
         // OPTIMIZED BUT LENIENT SETTINGS
         private const int FACE_SIZE = 100;
-        private const double UNKNOWN_THRESHOLD = 100;  // More lenient for better recognition
+        private const double UNKNOWN_THRESHOLD = 100; // was 100
 
         // FAST RECOGNITION - Only 1 frame needed
-        private const int RECOGNITION_HISTORY_SIZE = 1;
-        private Queue<int> _recognitionHistory = new Queue<int>();
+        private const int RECOGNITION_HISTORY_SIZE = 4; // was 1
+        private readonly Queue<int> _recognitionHistory = new();
+        private int? _lastPredictedEmpId;
 
         // LENIENT PROXIMITY DETECTION
-        private const int MIN_FACE_SIZE_FOR_RECOGNITION = 60;
+        private const int MIN_FACE_SIZE_FOR_RECOGNITION = 80; // was 60
         private const int MIN_FACE_SIZE_FOR_DETECTION = 40;
         private const int MAX_FACE_SIZE = 800;
-        private const double MIN_FACE_AREA_RATIO = 0.008;
+        private const double MIN_FACE_AREA_RATIO = 0.015; // was 0.008
 
         // DISTANCE DETECTION - MORE LENIENT
         private const double FACE_RECOGNITION_DISTANCE_INCHES = 20.0;
@@ -207,58 +208,45 @@ namespace AttendanceFaceRocog
             List<string> savedPaths = new List<string>();
             Rectangle[] faces = DetectFaces(frame);
 
-            if (faces.Length == 0) return savedPaths;
+            if (faces.Length == 0)
+                return savedPaths;
 
             Rectangle? closestFace = GetClosestFace(faces, frame.Width, frame.Height);
-            if (!closestFace.HasValue) return savedPaths;
+            if (!closestFace.HasValue)
+                return savedPaths;
 
-            Rectangle face = closestFace.Value;
+            Rectangle face = GetPaddedFaceBounds(closestFace.Value, frame.Size, 0.18);
 
             try
             {
-                Mat faceRegion = new Mat(frame, face);
-                Mat grayFace = new Mat();
+                using Mat faceRegion = new Mat(frame, face);
+                using Mat grayFace = new Mat();
                 CvInvoke.CvtColor(faceRegion, grayFace, ColorConversion.Bgr2Gray);
 
-                Image<Gray, byte> faceImage = grayFace.ToImage<Gray, byte>();
+                using Image<Gray, byte> faceImage = grayFace.ToImage<Gray, byte>();
+                using Image<Gray, byte>? normalized = NormalizeFace(faceImage);
 
-                Image<Gray, byte>? normalized = NormalizeFace(faceImage);
-                if (normalized != null)
+                if (normalized == null)
+                    return savedPaths;
+
+                SaveFaceVariation(savedPaths, normalized, empId, "base");
+
+                using (var flipped = normalized.Flip(FlipType.Horizontal))
                 {
-                    string fileName = $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_0.jpg";
-                    string filePath = Path.Combine(_facesFolder, fileName);
-                    normalized.Save(filePath);
-                    savedPaths.Add(filePath);
-                    
-                    // Save horizontal flip
-                    var flipped = normalized.Flip(FlipType.Horizontal);
-                    string flipPath = Path.Combine(_facesFolder, $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_flip.jpg");
-                    flipped.Save(flipPath);
-                    savedPaths.Add(flipPath);
-                    flipped.Dispose();
-
-                    // Save brightened version
-                    var brightened = normalized.Clone();
-                    brightened._GammaCorrect(1.3);
-                    string brightPath = Path.Combine(_facesFolder, $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_bright.jpg");
-                    brightened.Save(brightPath);
-                    savedPaths.Add(brightPath);
-                    brightened.Dispose();
-
-                    // Save darkened version
-                    var darkened = normalized.Clone();
-                    darkened._GammaCorrect(0.7);
-                    string darkPath = Path.Combine(_facesFolder, $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmss}_dark.jpg");
-                    darkened.Save(darkPath);
-                    savedPaths.Add(darkPath);
-                    darkened.Dispose();
-
-                    normalized.Dispose();
+                    SaveFaceVariation(savedPaths, flipped, empId, "flip");
                 }
 
-                faceRegion.Dispose();
-                grayFace.Dispose();
-                faceImage.Dispose();
+                using (var brightened = normalized.Clone())
+                {
+                    brightened._GammaCorrect(1.15);
+                    SaveFaceVariation(savedPaths, brightened, empId, "bright");
+                }
+
+                using (var darkened = normalized.Clone())
+                {
+                    darkened._GammaCorrect(0.85);
+                    SaveFaceVariation(savedPaths, darkened, empId, "dark");
+                }
 
                 System.Diagnostics.Debug.WriteLine($"✓ Captured {savedPaths.Count} face variations for empId {empId}");
             }
@@ -268,6 +256,27 @@ namespace AttendanceFaceRocog
             }
 
             return savedPaths;
+        }
+
+        private Rectangle GetPaddedFaceBounds(Rectangle face, Size frameSize, double paddingRatio)
+        {
+            int padX = (int)(face.Width * paddingRatio);
+            int padY = (int)(face.Height * paddingRatio);
+
+            int x = Math.Max(0, face.X - padX);
+            int y = Math.Max(0, face.Y - padY);
+            int right = Math.Min(frameSize.Width, face.Right + padX);
+            int bottom = Math.Min(frameSize.Height, face.Bottom + padY);
+
+            return new Rectangle(x, y, right - x, bottom - y);
+        }
+
+        private void SaveFaceVariation(List<string> savedPaths, Image<Gray, byte> image, int empId, string suffix)
+        {
+            string fileName = $"emp_{empId}_{DateTime.Now:yyyyMMddHHmmssfff}_{suffix}.jpg";
+            string filePath = Path.Combine(_facesFolder, fileName);
+            image.Save(filePath);
+            savedPaths.Add(filePath);
         }
 
         public string? CaptureFace(Mat frame, int empId)
@@ -317,7 +326,7 @@ namespace AttendanceFaceRocog
                     var faces = _faceDetector.DetectMultiScale(
                         grayFrame,
                         scaleFactor: 1.1,
-                        minNeighbors: 3,
+                        minNeighbors: 5,
                         minSize: new Size(minSize, minSize),
                         maxSize: new Size(maxSize, maxSize)
                     );
@@ -532,9 +541,10 @@ namespace AttendanceFaceRocog
 
             Rectangle[] optimalFaces = DetectFacesAtOptimalDistance(frame);
 
-            if (optimalFaces.Length == 0)
+            // Only allow one face in frame for recognition
+            if (optimalFaces.Length != 1)
             {
-                _recognitionHistory.Clear();
+                ClearRecognitionHistory();
                 return null;
             }
 
@@ -542,56 +552,63 @@ namespace AttendanceFaceRocog
 
             try
             {
-                Mat faceRegion = new Mat(frame, face);
-                Mat grayFace = new Mat();
+                using Mat faceRegion = new Mat(frame, face);
+                using Mat grayFace = new Mat();
                 CvInvoke.CvtColor(faceRegion, grayFace, ColorConversion.Bgr2Gray);
 
-                Image<Gray, byte> faceImage = grayFace.ToImage<Gray, byte>();
-                Image<Gray, byte>? normalized = NormalizeFace(faceImage);
+                using Image<Gray, byte> faceImage = grayFace.ToImage<Gray, byte>();
+                using Image<Gray, byte>? normalized = NormalizeFace(faceImage);
 
                 if (normalized == null)
                 {
-                    faceRegion.Dispose();
-                    grayFace.Dispose();
-                    faceImage.Dispose();
+                    ClearRecognitionHistory();
                     return null;
                 }
 
                 var result = _recognizer.Predict(normalized.Mat);
 
-                faceRegion.Dispose();
-                grayFace.Dispose();
-                faceImage.Dispose();
-                normalized.Dispose();
-
                 System.Diagnostics.Debug.WriteLine($"🔍 Recognition - Label: {result.Label}, Distance: {result.Distance:F2}");
 
-                if (result.Label >= 0 && result.Distance < UNKNOWN_THRESHOLD)
+                if (result.Label < 0 || result.Distance >= UNKNOWN_THRESHOLD)
                 {
-                    if (_labelToEmpId.TryGetValue(result.Label, out int empId))
-                    {
-                        double confidence = Math.Max(0, 100 - result.Distance);
-
-                        _recognitionHistory.Enqueue(empId);
-                        if (_recognitionHistory.Count > RECOGNITION_HISTORY_SIZE)
-                            _recognitionHistory.Dequeue();
-
-                        // INSTANT RECOGNITION with just 1 frame
-                        bool isStable = _recognitionHistory.Count >= RECOGNITION_HISTORY_SIZE &&
-                                       _recognitionHistory.All(id => id == empId);
-
-                        System.Diagnostics.Debug.WriteLine($"✓ Recognized Employee ID {empId} with {confidence:F1}% confidence (stable: {isStable})");
-
-                        return (empId, confidence, isStable, _detectedFaceDistance);
-                    }
+                    ClearRecognitionHistory();
+                    System.Diagnostics.Debug.WriteLine($"❌ Unknown face (distance: {result.Distance:F2} >= threshold: {UNKNOWN_THRESHOLD})");
+                    return null;
                 }
 
-                _recognitionHistory.Clear();
-                System.Diagnostics.Debug.WriteLine($"❌ Unknown face (distance: {result.Distance:F2} > threshold: {UNKNOWN_THRESHOLD})");
-                return null;
+                if (!_labelToEmpId.TryGetValue(result.Label, out int empId))
+                {
+                    ClearRecognitionHistory();
+                    return null;
+                }
+
+                double confidence = Math.Max(0, 100 - result.Distance);
+
+                if (_lastPredictedEmpId.HasValue && _lastPredictedEmpId.Value != empId)
+                {
+                    _recognitionHistory.Clear();
+                }
+
+                _lastPredictedEmpId = empId;
+                _recognitionHistory.Enqueue(empId);
+
+                while (_recognitionHistory.Count > RECOGNITION_HISTORY_SIZE)
+                {
+                    _recognitionHistory.Dequeue();
+                }
+
+                bool isStable =
+                    _recognitionHistory.Count == RECOGNITION_HISTORY_SIZE &&
+                    _recognitionHistory.All(id => id == empId);
+
+                System.Diagnostics.Debug.WriteLine(
+                    $"✓ Recognized Employee ID {empId} with {confidence:F1}% confidence (stable: {isStable}, frames: {_recognitionHistory.Count}/{RECOGNITION_HISTORY_SIZE})");
+
+                return (empId, confidence, isStable, _detectedFaceDistance);
             }
             catch (Exception ex)
             {
+                ClearRecognitionHistory();
                 System.Diagnostics.Debug.WriteLine($"❌ Recognition error: {ex.Message}");
                 return null;
             }
@@ -600,6 +617,7 @@ namespace AttendanceFaceRocog
         public void ClearRecognitionHistory()
         {
             _recognitionHistory.Clear();
+            _lastPredictedEmpId = null;
         }
 
         public double GetDetectedFaceDistance()
