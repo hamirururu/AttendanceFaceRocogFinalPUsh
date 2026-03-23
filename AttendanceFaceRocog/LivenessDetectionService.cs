@@ -28,6 +28,16 @@ namespace AttendanceFaceRocog
         private const int BLINK_STAGE_TIMEOUT = 12;
         private const int BLINK_HOLD_DURATION = 10;
 
+        public enum LivenessCalibrationProfile
+        {
+            Strict,
+            Balanced,
+            LowLightLenient
+        }
+
+        private double _reflectionThreatBlockThreshold = 1.15;
+        private double _motionTooLargeRatio = 0.60;
+
         public LivenessDetectionService()
         {
             try
@@ -57,6 +67,27 @@ namespace AttendanceFaceRocog
             _history.Clear();
             _faceHistory.Clear();
             ResetBlinkTracking();
+        }
+
+        public void SetCalibrationProfile(LivenessCalibrationProfile profile)
+        {
+            switch (profile)
+            {
+                case LivenessCalibrationProfile.Strict:
+                    _reflectionThreatBlockThreshold = 1.00;
+                    _motionTooLargeRatio = 0.55;
+                    break;
+
+                case LivenessCalibrationProfile.LowLightLenient:
+                    _reflectionThreatBlockThreshold = 1.28;
+                    _motionTooLargeRatio = 0.65;
+                    break;
+
+                default: // Balanced
+                    _reflectionThreatBlockThreshold = 1.15;
+                    _motionTooLargeRatio = 0.60;
+                    break;
+            }
         }
 
         public LivenessCheckResult Evaluate(Mat frame, Rectangle face)
@@ -90,6 +121,8 @@ namespace AttendanceFaceRocog
             double hotspotRatio = CalculateHotspotRatio(rawGray);
             double reflectionRatio = CalculateReflectionRatio(rawGray);
             double reflectionClusterCount = CalculateReflectionClusterCount(rawGray);
+            double zoneReflectionScore = CalculateZoneReflectionScore(rawGray);
+            double rectangularReflectionScore = CalculateRectangularReflectionScore(rawGray);
 
             double laplacianVariance = CalculateLaplacianVariance(equalizedGray);
             double edgeDensity = CalculateEdgeDensity(equalizedGray);
@@ -104,10 +137,11 @@ namespace AttendanceFaceRocog
                 darkRatio,
                 hotspotRatio,
                 reflectionRatio,
-                reflectionClusterCount));
+                reflectionClusterCount,
+                zoneReflectionScore,
+                rectangularReflectionScore));
 
             _faceHistory.Enqueue(safeFace);
-
             while (_history.Count > MAX_SAMPLES)
             {
                 _history.Dequeue();
@@ -139,6 +173,8 @@ namespace AttendanceFaceRocog
             double avgHotspotRatio = _history.Average(x => x.HotspotRatio);
             double avgReflectionRatio = _history.Average(x => x.ReflectionRatio);
             double avgReflectionClusterCount = _history.Average(x => x.ReflectionClusterCount);
+            double avgZoneReflectionScore = _history.Average(x => x.ZoneReflectionScore);
+            double avgRectangularReflectionScore = _history.Average(x => x.RectangularReflectionScore);
 
             double centerXRange =
                 _faceHistory.Max(r => r.X + (r.Width / 2.0)) -
@@ -159,14 +195,40 @@ namespace AttendanceFaceRocog
                   centerYRange >= avgFaceHeight * 0.02));
 
             bool motionTooLarge =
-                centerXRange > avgFaceWidth * 0.60 ||
-                centerYRange > avgFaceHeight * 0.60;
+                centerXRange > avgFaceWidth * _motionTooLargeRatio ||
+                centerYRange > avgFaceHeight * _motionTooLargeRatio;
+
+            double reflectionThreatScore =
+                Math.Min(1.20, avgReflectionRatio * 90.0) +
+                Math.Min(0.90, avgZoneReflectionScore * 30.0) +
+                Math.Min(0.85, avgRectangularReflectionScore) +
+                Math.Min(0.90, avgReflectionClusterCount * 0.45);
+
+            if (avgGlareRatio > 0.050)
+            {
+                reflectionThreatScore += 0.15;
+            }
+
+            if (avgHotspotRatio > 0.010)
+            {
+                reflectionThreatScore += 0.10;
+            }
+
+            if (avgRectangularReflectionScore > 0.35 && avgReflectionRatio > 0.003)
+            {
+                reflectionThreatScore += 0.20;
+            }
+
+            if (avgZoneReflectionScore > 0.010 && avgGlareRatio > 0.050)
+            {
+                reflectionThreatScore += 0.20;
+            }
 
             bool looksLikePhoneReflection =
-                avgReflectionRatio > 0.012 ||
-                avgReflectionClusterCount >= 1.0 ||
-                (avgReflectionRatio > 0.007 && avgGlareRatio > 0.040) ||
-                (avgReflectionClusterCount >= 1.0 && avgHotspotRatio > 0.020);
+                reflectionThreatScore >= _reflectionThreatBlockThreshold ||
+                (avgReflectionClusterCount >= 1.0 && avgRectangularReflectionScore > 0.30) ||
+                (avgZoneReflectionScore > 0.014 && avgReflectionRatio > 0.0035) ||
+                (avgReflectionRatio > 0.008 && avgGlareRatio > 0.045);
 
             bool looksLikePhoneScreen =
                 (avgMeanIntensity < 58 && avgDarkRatio > 0.34) ||
@@ -190,10 +252,13 @@ namespace AttendanceFaceRocog
                 avgEdgeDensity > 0.060 &&
                 avgLaplacian > 55 &&
                 avgReflectionRatio < 0.007 &&
-                avgReflectionClusterCount < 1.0;
+                avgReflectionClusterCount < 1.0 &&
+                avgZoneReflectionScore < 0.012 &&
+                avgRectangularReflectionScore < 0.35 &&
+                reflectionThreatScore < 0.90;
 
             System.Diagnostics.Debug.WriteLine(
-                $"Anti-spoof: mean={avgMeanIntensity:F2}, std={avgIntensityStdDev:F2}, dark={avgDarkRatio:F4}, hotspot={avgHotspotRatio:F4}, glare={avgGlareRatio:F4}, lap={avgLaplacian:F2}, edge={avgEdgeDensity:F4}, reflect={avgReflectionRatio:F4}, reflectClusters={avgReflectionClusterCount:F2}, blink={blinkDetected}, moveX={centerXRange:F2}, moveY={centerYRange:F2}");
+                $"Anti-spoof: mean={avgMeanIntensity:F2}, std={avgIntensityStdDev:F2}, dark={avgDarkRatio:F4}, hotspot={avgHotspotRatio:F4}, glare={avgGlareRatio:F4}, lap={avgLaplacian:F2}, edge={avgEdgeDensity:F4}, reflect={avgReflectionRatio:F4}, reflectClusters={avgReflectionClusterCount:F2}, zoneReflect={avgZoneReflectionScore:F4}, rectReflect={avgRectangularReflectionScore:F2}, reflectScore={reflectionThreatScore:F2}, blink={blinkDetected}, moveX={centerXRange:F2}, moveY={centerYRange:F2}");
 
             if (looksLikePhoneReflection)
             {
@@ -527,6 +592,153 @@ namespace AttendanceFaceRocog
             return suspiciousClusters;
         }
 
+        private static double CalculateZoneReflectionScore(Mat gray)
+        {
+            int width = gray.Width;
+            int height = gray.Height;
+
+            Rectangle forehead = new Rectangle(width / 5, height / 12, (width * 3) / 5, height / 5);
+            Rectangle noseBridge = new Rectangle((width * 2) / 5, height / 6, width / 5, height / 4);
+            Rectangle leftCheek = new Rectangle(width / 10, height / 2, width / 4, height / 4);
+            Rectangle rightCheek = new Rectangle(width - (width / 10) - (width / 4), height / 2, width / 4, height / 4);
+
+            double foreheadRatio = CalculateCleanBrightRatio(gray, forehead, 230, 3);
+            double noseBridgeRatio = CalculateCleanBrightRatio(gray, noseBridge, 228, 3);
+            double leftCheekRatio = CalculateCleanBrightRatio(gray, leftCheek, 230, 3);
+            double rightCheekRatio = CalculateCleanBrightRatio(gray, rightCheek, 230, 3);
+
+            double maxZone = Math.Max(Math.Max(foreheadRatio, noseBridgeRatio), Math.Max(leftCheekRatio, rightCheekRatio));
+            double avgZone = (foreheadRatio + noseBridgeRatio + leftCheekRatio + rightCheekRatio) / 4.0;
+
+            return maxZone + (avgZone * 0.65);
+        }
+
+        private static double CalculateCleanBrightRatio(Mat gray, Rectangle region, double threshold, int kernelSize)
+        {
+            Rectangle bounds = new Rectangle(Point.Empty, gray.Size);
+            Rectangle safeRegion = Rectangle.Intersect(bounds, region);
+            if (safeRegion.Width <= 0 || safeRegion.Height <= 0)
+            {
+                return 0;
+            }
+
+            using Mat roi = new Mat(gray, safeRegion);
+            using Mat bright = new Mat();
+            using Mat cleaned = new Mat();
+            using Mat kernel = CreateOnesKernel(kernelSize, kernelSize);
+
+            CvInvoke.Threshold(roi, bright, threshold, 255, ThresholdType.Binary);
+            CvInvoke.MorphologyEx(
+                bright,
+                cleaned,
+                MorphOp.Open,
+                kernel,
+                new Point(-1, -1),
+                1,
+                BorderType.Reflect,
+                default);
+
+            int brightPixels = CvInvoke.CountNonZero(cleaned);
+            return (double)brightPixels / (roi.Rows * roi.Cols);
+        }
+
+        private static double CalculateRectangularReflectionScore(Mat gray)
+        {
+            using Mat bright = new Mat();
+            using Mat closed = new Mat();
+            using Mat cleaned = new Mat();
+            using Mat hierarchy = new Mat();
+            using Mat closeKernel = CreateOnesKernel(5, 5);
+            using Mat openKernel = CreateOnesKernel(3, 3);
+            using VectorOfVectorOfPoint contours = new VectorOfVectorOfPoint();
+
+            CvInvoke.Threshold(gray, bright, 232, 255, ThresholdType.Binary);
+            CvInvoke.MorphologyEx(
+                bright,
+                closed,
+                MorphOp.Close,
+                closeKernel,
+                new Point(-1, -1),
+                1,
+                BorderType.Reflect,
+                default);
+
+            CvInvoke.MorphologyEx(
+                closed,
+                cleaned,
+                MorphOp.Open,
+                openKernel,
+                new Point(-1, -1),
+                1,
+                BorderType.Reflect,
+                default);
+
+            CvInvoke.FindContours(
+                cleaned,
+                contours,
+                hierarchy,
+                RetrType.External,
+                ChainApproxMethod.ChainApproxSimple);
+
+            double faceArea = gray.Rows * gray.Cols;
+            double bestScore = 0;
+
+            for (int i = 0; i < contours.Size; i++)
+            {
+                using VectorOfPoint contour = contours[i];
+
+                double contourArea = CvInvoke.ContourArea(contour);
+                if (contourArea <= 0)
+                {
+                    continue;
+                }
+
+                double areaRatio = contourArea / faceArea;
+                if (areaRatio < 0.0009 || areaRatio > 0.12)
+                {
+                    continue;
+                }
+
+                Rectangle rect = CvInvoke.BoundingRectangle(contour);
+                double rectArea = Math.Max(1, rect.Width * rect.Height);
+                double fillRatio = contourArea / rectArea;
+                double aspectRatio = rect.Width / (double)Math.Max(1, rect.Height);
+
+                double areaScore = Clamp01(areaRatio / 0.025);
+                double fillScore = Clamp01((fillRatio - 0.28) / 0.40);
+                double aspectScore = Clamp01(1.0 - (Math.Abs(Math.Log(aspectRatio)) / 1.25));
+
+                double score =
+                    (areaScore * 0.25) +
+                    (fillScore * 0.45) +
+                    (aspectScore * 0.30);
+
+                if (rect.Width >= gray.Width * 0.12 || rect.Height >= gray.Height * 0.12)
+                {
+                    score += 0.10;
+                }
+
+                bestScore = Math.Max(bestScore, Clamp01(score));
+            }
+
+            return bestScore;
+        }
+
+        private static double Clamp01(double value)
+        {
+            if (value < 0)
+            {
+                return 0;
+            }
+
+            if (value > 1)
+            {
+                return 1;
+            }
+
+            return value;
+        }
+
         private static Mat CreateOnesKernel(int width, int height)
         {
             Mat kernel = new Mat(height, width, DepthType.Cv8U, 1);
@@ -557,8 +769,17 @@ namespace AttendanceFaceRocog
             double DarkRatio,
             double HotspotRatio,
             double ReflectionRatio,
-            double ReflectionClusterCount);
+            double ReflectionClusterCount,
+            double ZoneReflectionScore,
+            double RectangularReflectionScore);
     }
 
     public readonly record struct LivenessCheckResult(bool IsLive, string Message);
+
+    public enum LivenessCalibrationProfile
+    {
+        Strict,
+        Balanced,
+        LowLightLenient
+    }
 }

@@ -58,6 +58,9 @@ namespace AttendanceFaceRocog
         private bool _isCameraStandby = false;
         private Panel? _standbyOverlay;
 
+        // Flag for model warm-up
+        private bool _isModelWarmupInProgress = false;
+
         #endregion
 
         #region Constructor & Initialization
@@ -88,20 +91,34 @@ namespace AttendanceFaceRocog
                 }
 
                 _faceService = FaceRecognitionService.Instance;
-                _faceService.TrainModel();
+                _faceService.SetRecognitionProfile(FaceRecognitionService.RecognitionProfile.FastKiosk);
+                _livenessService.SetCalibrationProfile(LivenessDetectionService.LivenessCalibrationProfile.Balanced);
+
                 _faceService.ModelRetrained -= OnModelRetrained;
                 _faceService.ModelRetrained += OnModelRetrained;
+
+                if (!_faceService.IsModelTrained && !_isModelWarmupInProgress)
+                {
+                    _isModelWarmupInProgress = true;
+                    _ = Task.Run(() =>
+                    {
+                        try
+                        {
+                            _faceService.TrainModel();
+                        }
+                        finally
+                        {
+                            _isModelWarmupInProgress = false;
+                        }
+                    });
+                }
 
                 System.Diagnostics.Debug.WriteLine($"Face service initialized. Trained: {_faceService.IsModelTrained}, Employees: {_faceService.TrainedEmployeeCount}");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error initializing face service: {ex.Message}");
-                MessageBox.Show(
-                    $"Error: {ex.Message}\n\nInner: {ex.InnerException?.Message}",
-                    "Initialization Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                UpdateStatus("●  Face service initialization failed.", Color.Red);
             }
         }
 
@@ -288,20 +305,15 @@ namespace AttendanceFaceRocog
                     {
                         return "TimeIn";
                     }
-                    else
-                    {
-                        ShowAlreadyTimedInMessage();
-                        return null;
-                    }
+
+                    ShowAlreadyTimedInMessage();
+                    return null;
 
                 case AttendancePeriod.AfterWork:
                     if (status.hasTimeOut)
                     {
-                        MessageBox.Show(
-                            "Time Out has already been recorded for today.",
-                            "Already Recorded",
-                            MessageBoxButtons.OK,
-                            MessageBoxIcon.Information);
+                        UpdateStatus("●  Time Out already recorded today.", Color.FromArgb(59, 130, 246));
+                        StartAutoClearTimer();
                         return null;
                     }
                     return "TimeOut";
@@ -1506,13 +1518,6 @@ namespace AttendanceFaceRocog
                     }
 
                     UpdateStatus($"●  {hello.Message}", Color.Orange);
-
-                    MessageBox.Show(
-                        hello.Message,
-                        "Windows Hello Verification",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-
                     _isProcessingAttendance = false;
                     return;
                 }
@@ -1523,13 +1528,6 @@ namespace AttendanceFaceRocog
             {
                 System.Diagnostics.Debug.WriteLine($"Windows Hello verification error: {ex}");
                 UpdateStatus("●  Windows Hello verification failed.", Color.Red);
-
-                MessageBox.Show(
-                    "Windows Hello verification failed. Please try again.",
-                    "Windows Hello Verification",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-
                 _isProcessingAttendance = false;
             }
         }

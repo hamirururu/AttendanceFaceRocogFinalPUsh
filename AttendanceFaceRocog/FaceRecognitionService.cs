@@ -41,26 +41,31 @@ namespace AttendanceFaceRocog
         private bool _isModelTrained = false;
 
         private readonly string _facesFolder;
-
-        // OPTIMIZED BUT LENIENT SETTINGS
-        private const int FACE_SIZE = 100;
-        private const double UNKNOWN_THRESHOLD = 100; // was 100
-
-        // FAST RECOGNITION - Only 1 frame needed
-        private const int RECOGNITION_HISTORY_SIZE = 4; // was 1
         private readonly Queue<int> _recognitionHistory = new();
         private int? _lastPredictedEmpId;
 
-        // LENIENT PROXIMITY DETECTION
-        private const int MIN_FACE_SIZE_FOR_RECOGNITION = 80; // was 60
-        private const int MIN_FACE_SIZE_FOR_DETECTION = 40;
-        private const int MAX_FACE_SIZE = 800;
-        private const double MIN_FACE_AREA_RATIO = 0.015; // was 0.008
+        // OPTIMIZED SETTINGS
+        private const int FACE_SIZE = 100;
 
-        // DISTANCE DETECTION - MORE LENIENT
+        public enum RecognitionProfile
+        {
+            Strict,
+            Balanced,
+            FastKiosk
+        }
+
+        private int _recognitionHistorySize = 2;
+        private double _unknownThreshold = 108;
+        private int _minFaceSizeForRecognition = 70;
+        private double _minFaceAreaRatio = 0.012;
+        private int _minFaceSizeForDetection = 40;
+        private int _maxFaceSize = 800;
+        private double _detectScaleFactor = 1.15;
+        private int _detectMinNeighbors = 4;
+
         private const double FACE_RECOGNITION_DISTANCE_INCHES = 20.0;
         private const double AVERAGE_FACE_WIDTH_INCHES = 5.5;
-        private const double CAMERA_FOCAL_LENGTH = 500.0;  // Lower = more lenient
+        private const double CAMERA_FOCAL_LENGTH = 500.0;
         private double _detectedFaceDistance = 0;
 
         // Private constructor for singleton
@@ -126,15 +131,8 @@ namespace AttendanceFaceRocog
 
             try
             {
-                // Resize to standard size
-                var resized = face.Resize(FACE_SIZE, FACE_SIZE, Inter.Cubic);
-
-                // Histogram equalization for lighting normalization
+                var resized = face.Resize(FACE_SIZE, FACE_SIZE, Inter.Linear);
                 resized._EqualizeHist();
-
-                // Slight smoothing
-                CvInvoke.GaussianBlur(resized, resized, new Size(3, 3), 0);
-
                 return resized;
             }
             catch (Exception ex)
@@ -174,7 +172,7 @@ namespace AttendanceFaceRocog
 
         private bool IsFaceCloseEnough(Rectangle face, int frameWidth, int frameHeight)
         {
-            if (face.Width < MIN_FACE_SIZE_FOR_RECOGNITION || face.Height < MIN_FACE_SIZE_FOR_RECOGNITION)
+            if (face.Width < _minFaceSizeForRecognition || face.Height < _minFaceSizeForRecognition)
             {
                 return false;
             }
@@ -183,7 +181,7 @@ namespace AttendanceFaceRocog
             double frameArea = frameWidth * frameHeight;
             double areaRatio = faceArea / frameArea;
 
-            return areaRatio >= MIN_FACE_AREA_RATIO;
+            return areaRatio >= _minFaceAreaRatio;
         }
 
         private Rectangle? GetClosestFace(Rectangle[] faces, int frameWidth, int frameHeight)
@@ -312,37 +310,23 @@ namespace AttendanceFaceRocog
 
                 CvInvoke.EqualizeHist(grayFrame, grayFrame);
 
-                int minSize = Math.Max(MIN_FACE_SIZE_FOR_DETECTION, 20);
-                int maxSize = Math.Min(MAX_FACE_SIZE, Math.Max(frame.Width, frame.Height));
+                int minSize = Math.Max(_minFaceSizeForDetection, 20);
+                int maxSize = Math.Min(_maxFaceSize, Math.Max(frame.Width, frame.Height));
 
-                if (minSize >= maxSize)
+                var faces = _faceDetector.DetectMultiScale(
+                    grayFrame,
+                    scaleFactor: _detectScaleFactor,
+                    minNeighbors: _detectMinNeighbors,
+                    minSize: new Size(minSize, minSize),
+                    maxSize: new Size(maxSize, maxSize)
+                );
+
+                if (faces.Length > 0)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Invalid size parameters: minSize={minSize}, maxSize={maxSize}");
-                    return Array.Empty<Rectangle>();
+                    System.Diagnostics.Debug.WriteLine($"✓ Detected {faces.Length} face(s)");
                 }
 
-                try
-                {
-                    var faces = _faceDetector.DetectMultiScale(
-                        grayFrame,
-                        scaleFactor: 1.1,
-                        minNeighbors: 5,
-                        minSize: new Size(minSize, minSize),
-                        maxSize: new Size(maxSize, maxSize)
-                    );
-
-                    if (faces.Length > 0)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"✓ Detected {faces.Length} face(s)");
-                    }
-
-                    return faces ?? Array.Empty<Rectangle>();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error in DetectMultiScale: {ex.Message}");
-                    return Array.Empty<Rectangle>();
-                }
+                return faces ?? Array.Empty<Rectangle>();
             }
             catch (Exception ex)
             {
@@ -539,16 +523,17 @@ namespace AttendanceFaceRocog
                 return null;
             }
 
-            Rectangle[] optimalFaces = DetectFacesAtOptimalDistance(frame);
+            Rectangle[] closeFaces = DetectCloseFaces(frame);
 
-            // Only allow one face in frame for recognition
-            if (optimalFaces.Length != 1)
+            // Keep one-face rule
+            if (closeFaces.Length != 1)
             {
                 ClearRecognitionHistory();
                 return null;
             }
 
-            Rectangle face = optimalFaces[0];
+            Rectangle face = closeFaces[0];
+            _detectedFaceDistance = CalculateFaceDistanceInches(face);
 
             try
             {
@@ -569,10 +554,10 @@ namespace AttendanceFaceRocog
 
                 System.Diagnostics.Debug.WriteLine($"🔍 Recognition - Label: {result.Label}, Distance: {result.Distance:F2}");
 
-                if (result.Label < 0 || result.Distance >= UNKNOWN_THRESHOLD)
+                if (result.Label < 0 || result.Distance >= _unknownThreshold)
                 {
                     ClearRecognitionHistory();
-                    System.Diagnostics.Debug.WriteLine($"❌ Unknown face (distance: {result.Distance:F2} >= threshold: {UNKNOWN_THRESHOLD})");
+                    System.Diagnostics.Debug.WriteLine($"❌ Unknown face (distance: {result.Distance:F2} >= threshold: {_unknownThreshold})");
                     return null;
                 }
 
@@ -592,17 +577,17 @@ namespace AttendanceFaceRocog
                 _lastPredictedEmpId = empId;
                 _recognitionHistory.Enqueue(empId);
 
-                while (_recognitionHistory.Count > RECOGNITION_HISTORY_SIZE)
+                while (_recognitionHistory.Count > _recognitionHistorySize)
                 {
                     _recognitionHistory.Dequeue();
                 }
 
                 bool isStable =
-                    _recognitionHistory.Count == RECOGNITION_HISTORY_SIZE &&
+                    _recognitionHistory.Count == _recognitionHistorySize &&
                     _recognitionHistory.All(id => id == empId);
 
                 System.Diagnostics.Debug.WriteLine(
-                    $"✓ Recognized Employee ID {empId} with {confidence:F1}% confidence (stable: {isStable}, frames: {_recognitionHistory.Count}/{RECOGNITION_HISTORY_SIZE})");
+                    $"✓ Recognized Employee ID {empId} with {confidence:F1}% confidence (stable: {isStable}, frames: {_recognitionHistory.Count}/{_recognitionHistorySize})");
 
                 return (empId, confidence, isStable, _detectedFaceDistance);
             }
@@ -627,6 +612,41 @@ namespace AttendanceFaceRocog
 
         public bool IsModelTrained => _isModelTrained;
         public int TrainedEmployeeCount => _labelToEmpId.Count;
+
+        public void SetRecognitionProfile(RecognitionProfile profile)
+        {
+            switch (profile)
+            {
+                case RecognitionProfile.Strict:
+                    _recognitionHistorySize = 4;
+                    _unknownThreshold = 95;
+                    _minFaceSizeForRecognition = 85;
+                    _minFaceAreaRatio = 0.016;
+                    _detectScaleFactor = 1.08;
+                    _detectMinNeighbors = 6;
+                    break;
+
+                case RecognitionProfile.Balanced:
+                    _recognitionHistorySize = 3;
+                    _unknownThreshold = 100;
+                    _minFaceSizeForRecognition = 80;
+                    _minFaceAreaRatio = 0.015;
+                    _detectScaleFactor = 1.10;
+                    _detectMinNeighbors = 5;
+                    break;
+
+                default: // FastKiosk
+                    _recognitionHistorySize = 2;
+                    _unknownThreshold = 108;
+                    _minFaceSizeForRecognition = 70;
+                    _minFaceAreaRatio = 0.012;
+                    _detectScaleFactor = 1.15;
+                    _detectMinNeighbors = 4;
+                    break;
+            }
+
+            ClearRecognitionHistory();
+        }
 
         public void Dispose()
         {
