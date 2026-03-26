@@ -45,10 +45,10 @@ namespace AttendanceFaceRocog
         private bool _isCleanedUp = false;
 
         // Time period definitions
-        private static readonly TimeSpan EARLY_LOGIN_END = new TimeSpan(9, 0, 0);
-        private static readonly TimeSpan MORNING_WORK_END = new TimeSpan(12, 0, 0);
-        private static readonly TimeSpan LUNCH_END = new TimeSpan(13, 0, 0);
-        private static readonly TimeSpan AFTERNOON_WORK_END = new TimeSpan(18, 0, 0);
+        private static readonly TimeSpan EARLY_LOGIN_END = TimeSpan.FromHours(9);
+        private static readonly TimeSpan MORNING_WORK_END = TimeSpan.FromHours(12);
+        private static readonly TimeSpan LUNCH_END = TimeSpan.FromHours(13);
+        private static readonly TimeSpan AFTERNOON_WORK_END = TimeSpan.FromHours(18);
 
         // Auto camera on/off based on face presence
         private System.Windows.Forms.Timer? _facePresenceTimer;
@@ -287,6 +287,14 @@ namespace AttendanceFaceRocog
             switch (period)
             {
                 case AttendancePeriod.EarlyLogin:
+
+                    // If user already has any attendance record, don't show dialog again
+                    if (status.hasTimeIn || status.hasTimeOut || status.hasStartBreak || status.hasStopBreak)
+                    {
+                        ShowAlreadyTimedInMessage(); // or customize message if needed
+                        return null;
+                    }
+
                     return ShowEarlyLoginDialog();
 
                 case AttendancePeriod.MorningWork:
@@ -649,7 +657,7 @@ namespace AttendanceFaceRocog
         {
             if (picCamera == null || picCamera.IsDisposed || _capture == null) return;
 
-            using Mat frame = new Mat();
+            using var frame = new Mat();
 
             try
             {
@@ -661,7 +669,7 @@ namespace AttendanceFaceRocog
                 using Mat display = frame.Clone();
                 Rectangle crop = GetCenterCrop(display.Size, picCamera.Size);
 
-                using (Mat cropped = new Mat(display, crop))
+                using var cropped = new Mat(display, crop);
                 {
                     CvInvoke.Resize(cropped, cropped, picCamera.Size);
 
@@ -852,8 +860,8 @@ namespace AttendanceFaceRocog
                 return;
 
             using Mat original = frame.Clone();
-            using Mat blurred = new Mat();
-            using Mat mask = new Mat(frame.Rows, frame.Cols, Emgu.CV.CvEnum.DepthType.Cv8U, 1);
+            using var blurred = new Mat();
+            using var mask = new Mat(frame.Rows, frame.Cols, Emgu.CV.CvEnum.DepthType.Cv8U, 1);
 
             CvInvoke.GaussianBlur(original, blurred, new Size(55, 55), 0);
             mask.SetTo(new MCvScalar(0));
@@ -861,8 +869,8 @@ namespace AttendanceFaceRocog
             int clearWidth = (int)(frame.Width * 0.42);
             int clearHeight = (int)(frame.Height * 0.78);
 
-            Point center = new Point(frame.Width / 2, frame.Height / 2);
-            Size axes = new Size(clearWidth / 2, clearHeight / 2);
+            var center = new Point(frame.Width / 2, frame.Height / 2);
+            var axes = new Size(clearWidth / 2, clearHeight / 2);
 
             CvInvoke.Ellipse(mask, center, axes, 0, 0, 360, new MCvScalar(255), -1);
 
@@ -1204,7 +1212,7 @@ namespace AttendanceFaceRocog
 
         private Bitmap CreateDefaultAvatar()
         {
-            Bitmap bmp = new Bitmap(100, 100);
+            var bmp = new Bitmap(100, 100);
 
             using (Graphics g = Graphics.FromImage(bmp))
             {
