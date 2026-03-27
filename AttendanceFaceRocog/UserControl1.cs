@@ -61,6 +61,9 @@ namespace AttendanceFaceRocog
         // Flag for model warm-up
         private bool _isModelWarmupInProgress = false;
 
+        // Latest camera frame for snapshot capture
+        private Mat? _lastFrame;
+
         #endregion
 
         #region Constructor & Initialization
@@ -135,14 +138,11 @@ namespace AttendanceFaceRocog
         /// </summary>
         private async void UserControl1_Load(object? sender, EventArgs e)
         {
-            // Small delay to ensure UI is fully loaded
             await Task.Delay(500);
 
-            // Check if cleanup was called during the delay
             if (_isCleanedUp || IsDisposed || !Visible)
                 return;
 
-            // Auto-start the camera
             AutoStartCamera();
         }
 
@@ -271,8 +271,8 @@ namespace AttendanceFaceRocog
         }
 
         /// <summary>
-        /// Main method to handle attendance based on current time
-        /// Returns the action to perform, or null if user cancelled
+        /// Main method to handle attendance based on current time.
+        /// Returns the action to perform, or null if user cancelled.
         /// </summary>
         private string? HandleAttendanceByTime()
         {
@@ -287,14 +287,11 @@ namespace AttendanceFaceRocog
             switch (period)
             {
                 case AttendancePeriod.EarlyLogin:
-
-                    // If user already has any attendance record, don't show dialog again
                     if (status.hasTimeIn || status.hasTimeOut || status.hasStartBreak || status.hasStopBreak)
                     {
-                        ShowAlreadyTimedInMessage(); // or customize message if needed
+                        ShowAlreadyTimedInMessage();
                         return null;
                     }
-
                     return ShowEarlyLoginDialog();
 
                 case AttendancePeriod.MorningWork:
@@ -313,7 +310,6 @@ namespace AttendanceFaceRocog
                     {
                         return "TimeIn";
                     }
-
                     ShowAlreadyTimedInMessage();
                     return null;
 
@@ -376,7 +372,6 @@ namespace AttendanceFaceRocog
                     return dialog.Tag?.ToString();
                 }
             }
-
             return null;
         }
 
@@ -395,7 +390,6 @@ namespace AttendanceFaceRocog
                     return dialog.Tag?.ToString();
                 }
             }
-
             return null;
         }
 
@@ -414,7 +408,6 @@ namespace AttendanceFaceRocog
                     return dialog.Tag?.ToString();
                 }
             }
-
             return null;
         }
 
@@ -516,7 +509,6 @@ namespace AttendanceFaceRocog
                         dialog.Tag = action.Replace(" ", "");
                         dialog.DialogResult = DialogResult.OK;
                     }
-
                     dialog.Close();
                 };
 
@@ -647,6 +639,13 @@ namespace AttendanceFaceRocog
                 _standbyOverlay.Visible = false;
             }
 
+            // Dispose the last saved frame
+            lock (this)
+            {
+                _lastFrame?.Dispose();
+                _lastFrame = null;
+            }
+
             UpdateStatus("●  Ready to Scan", Color.FromArgb(156, 163, 175));
         }
 
@@ -663,6 +662,13 @@ namespace AttendanceFaceRocog
             {
                 _capture.Retrieve(frame);
                 CvInvoke.Flip(frame, frame, FlipType.Horizontal);
+
+                // Save a thread-safe copy of the latest frame for snapshot capture
+                lock (this)
+                {
+                    _lastFrame?.Dispose();
+                    _lastFrame = frame.Clone();
+                }
 
                 ProcessFaceDetection(frame);
 
@@ -959,6 +965,9 @@ namespace AttendanceFaceRocog
                             empDetails.Value.empCode,
                             empDetails.Value.fullName,
                             currentTime);
+
+                        // Capture and save a snapshot of the camera frame
+                        CaptureAttendanceSnapshot(empId, empDetails.Value.empCode, action);
                     }
 
                     _recognizedEmpId = null;
@@ -983,6 +992,53 @@ namespace AttendanceFaceRocog
                 UpdateStatus("❌ Error recording attendance", Color.Red);
                 _hasLoggedAttendance = false;
                 _isProcessingAttendance = false;
+            }
+        }
+
+        /// <summary>
+        /// Captures the current camera frame and saves it as a JPEG snapshot.
+        /// Saved to: [AppFolder]\AttendanceSnapshots\{empCode}\{action}\{empCode}_{action}_{yyyyMMdd_HHmmss}.jpg
+        /// </summary>
+        private void CaptureAttendanceSnapshot(int empId, string empCode, string action)
+        {
+            try
+            {
+                string baseDir = Path.Combine(
+                   @"C:\Users\POS\source\repos\AttendanceFaceRocog\AttendanceFaceRocog\AttendanceSnapshots",
+                    empCode,
+                    action);
+
+                Directory.CreateDirectory(baseDir);
+
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                string fileName = $"{empCode}_{action}_{timestamp}.jpg";
+                string filePath = Path.Combine(baseDir, fileName);
+
+                Mat? frameCopy = null;
+                lock (this)
+                {
+                    if (_lastFrame != null && !_lastFrame.IsEmpty)
+                        frameCopy = _lastFrame.Clone();
+                }
+
+                if (frameCopy == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("⚠ CaptureAttendanceSnapshot: no frame available.");
+                    return;
+                }
+
+                using (frameCopy)
+                {
+                    Bitmap bmp = frameCopy.ToBitmap();
+                    bmp.Save(filePath, System.Drawing.Imaging.ImageFormat.Jpeg);
+                    bmp.Dispose();
+                }
+
+                System.Diagnostics.Debug.WriteLine($"📸 Snapshot saved → {filePath}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ CaptureAttendanceSnapshot error: {ex.Message}");
             }
         }
 
@@ -1070,6 +1126,9 @@ namespace AttendanceFaceRocog
                                 empDetails.Value.empCode,
                                 empDetails.Value.fullName,
                                 currentTime);
+
+                            // Capture and save a snapshot of the camera frame
+                            CaptureAttendanceSnapshot(empId, empDetails.Value.empCode, action);
                         }
 
                         StartAutoClearTimer();
